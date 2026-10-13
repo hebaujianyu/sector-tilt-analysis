@@ -1,0 +1,5 @@
+上架手册.md
+*.zip
+.git/
+__pycache__/
+*.pyc

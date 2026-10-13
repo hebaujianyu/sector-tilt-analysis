@@ -1,0 +1,39 @@
+# -*- coding: utf-8 -*-
+"""
+TiltMaster - RF Vertical Analysis for QGIS
+
+Copyright (C) 2026 Achmad Amrulloh
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+"""
+
+"""
+Infrastructure package for TiltMaster plugin.
+
+Provides core infrastructure components:
+- Layer management for RF analysis layers
+- Map rendering utilities
+- Geometry utilities for RF sector calculations
+"""
+
+# Import key infrastructure components for easy access
+from .layers import LayerManager
+from .rendering import MapRenderer
+from .geometry import SectorGeometry
+
+__all__ = [
+    "LayerManager",
+    "MapRenderer",
+    "SectorGeometry",
+]
