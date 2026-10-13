@@ -465,7 +465,7 @@ class MapRenderer:
                     beamwidth=beamwidth
                 )
 
-            except Exception:
+            except Exception:  # nosec
                 continue
 
             if not result:

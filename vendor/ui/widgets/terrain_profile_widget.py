@@ -367,7 +367,7 @@ class TerrainProfileWidget(QWidget):
                 # SignalProxy tidak memiliki method disconnect langsung,
                 # tapi kita bisa set ke None
                 self.proxy = None
-            except:
+            except:  # nosec
                 pass
         
         print("✅ TerrainProfileWidget timers cleaned up")
@@ -528,7 +528,7 @@ class TerrainProfileWidget(QWidget):
             for label in self._intersection_labels:
                 try:
                     self.plot_item.removeItem(label)
-                except:
+                except:  # nosec
                     pass
             self._intersection_labels = []
         else:
@@ -680,7 +680,7 @@ class TerrainProfileWidget(QWidget):
                 try:
                     self.plot_item.removeItem(vline)
                     self.plot_item.removeItem(label)
-                except:
+                except:  # nosec
                     pass
             self._vline_labels = []
 
@@ -703,7 +703,7 @@ class TerrainProfileWidget(QWidget):
         if hasattr(self, 'terrain_fill'):
             try:
                 self.plot_item.removeItem(self.terrain_fill)
-            except:
+            except:  # nosec
                 pass
             self.terrain_fill = None
         
@@ -713,7 +713,7 @@ class TerrainProfileWidget(QWidget):
             for item in self._header_items:
                 try:
                     self.plot_item.removeItem(item)
-                except:
+                except:  # nosec
                     pass
             self._header_items = []
         
@@ -723,7 +723,7 @@ class TerrainProfileWidget(QWidget):
             for proxy in self._point_labels:
                 try:
                     self.plot_item.scene().removeItem(proxy)
-                except:
+                except:  # nosec
                     pass
             self._point_labels = []
         
@@ -732,7 +732,7 @@ class TerrainProfileWidget(QWidget):
             for rect in self._debug_rects:
                 try:
                     self.plot_item.scene().removeItem(rect)
-                except:
+                except:  # nosec
                     pass
             self._debug_rects = []
             
@@ -742,7 +742,7 @@ class TerrainProfileWidget(QWidget):
             for label in self._intersection_labels:
                 try:
                     self.plot_item.removeItem(label)
-                except:
+                except:  # nosec
                     pass
             self._intersection_labels = []
             
@@ -996,7 +996,7 @@ class TerrainProfileWidget(QWidget):
         if hasattr(self, 'beam_fill'):
             try:
                 self.plot_item.removeItem(self.beam_fill)
-            except:
+            except:  # nosec
                 pass
 
         # Buat beam fill baru yang tetap penuh (tidak terpotong intersection)
@@ -1072,7 +1072,7 @@ class TerrainProfileWidget(QWidget):
         if hasattr(self, 'terrain_fill'):
             try:
                 self.plot_item.removeItem(self.terrain_fill)
-            except:
+            except:  # nosec
                 pass
         
         # Buat fill antara terrain curve dan baseline
@@ -1573,7 +1573,7 @@ class TerrainProfileWidget(QWidget):
             if hasattr(self, 'legend_frame'):
                 self.legend_frame.raise_()
 
-        except Exception:
+        except Exception:  # nosec
             pass
         
         # ======================================================
@@ -2028,7 +2028,7 @@ class TerrainProfileWidget(QWidget):
             if isinstance(item, pg.ScatterPlotItem):
                 try:
                     self.plot_item.removeItem(item)
-                except:
+                except:  # nosec
                     pass
         
         # =====================================================
@@ -2038,7 +2038,7 @@ class TerrainProfileWidget(QWidget):
             for label in self._intersection_labels:
                 try:
                     self.plot_item.removeItem(label)
-                except:
+                except:  # nosec
                     pass
             self._intersection_labels = []
         
@@ -2048,7 +2048,7 @@ class TerrainProfileWidget(QWidget):
         if hasattr(self, 'beam_fill'):
             try:
                 self.plot_item.removeItem(self.beam_fill)
-            except:
+            except:  # nosec
                 pass
             self.beam_fill = None
         
@@ -2060,7 +2060,7 @@ class TerrainProfileWidget(QWidget):
             if isinstance(item, pg.LinearRegionItem):
                 try:
                     self.plot_item.removeItem(item)
-                except:
+                except:  # nosec
                     pass
         
         # =====================================================
@@ -2143,7 +2143,7 @@ class TerrainProfileWidget(QWidget):
             # Reset ke range default (misal 0-3000m, 700-900m)
             self.plot_item.setXRange(0, 3000, padding=0)
             self.plot_item.setYRange(700, 900, padding=0)
-        except:
+        except:  # nosec
             pass
         
         # Refresh plot

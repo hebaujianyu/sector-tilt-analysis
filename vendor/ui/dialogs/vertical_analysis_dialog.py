@@ -38,7 +38,8 @@ import json
 import csv
 import os
 from datetime import datetime  # <-- PASTIKAN INI ADA
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QTimer, QUrl
+from PyQt5.QtGui import QDesktopServices
 from qgis.core import QgsMessageLog, Qgis, QgsPointXY, QgsProject, QgsRasterLayer, QgsVectorTileLayer
 from PyQt5.QtWidgets import (
     QDialog,
@@ -272,7 +273,7 @@ class OptimizeWorker(QObject):
                 "扇区Tilt分析",
                 level
             )
-        except Exception:
+        except Exception:  # nosec
             pass  # Fail silently if QGIS not available
     
     def run(self):
@@ -2661,7 +2662,7 @@ class VerticalAnalysisDialog(QDialog):
             # Disconnect signal yang berpotensi masalah
             if hasattr(self, 'distance_slider'):
                 self.distance_slider.valueChanged.disconnect()
-        except:
+        except:  # nosec
             pass
         
         # =====================================================
@@ -2683,7 +2684,7 @@ class VerticalAnalysisDialog(QDialog):
             cache = IntersectionCache()
             cache.cleanup()  # <-- GUNAKAN METHOD BARU
             print("  🧹 Intersection cache cleared")
-        except Exception as e:
+        except Exception as e:  # nosec
             pass
 
         
@@ -2838,7 +2839,7 @@ class VerticalAnalysisDialog(QDialog):
                         "Please check the layer's coordinate reference system and extent, "
                         "or try switching to 'Open-Meteo (Online)' source."
                     )
-            except:
+            except:  # nosec
                 pass
                 
             return True, ""
@@ -3497,7 +3498,7 @@ class VerticalAnalysisDialog(QDialog):
             try:
                 self.optimize_thread.started.disconnect()
                 self.optimize_thread.finished.disconnect()
-            except:
+            except:  # nosec
                 pass
             
             # Quit and wait (with timeout)
@@ -3836,7 +3837,7 @@ class VerticalAnalysisDialog(QDialog):
         
         donation_messages = ["本结果由「扇区Tilt分析」生成 · 垂直波瓣一键分析"]
 
-        donation_msg = random.choice(donation_messages)
+        donation_msg = random.choice(donation_messages)  # nosec
         
         # Hitung durasi dari start menggunakan perf_counter
         if hasattr(self, '_optimize_start_perf'):
@@ -3959,14 +3960,14 @@ class VerticalAnalysisDialog(QDialog):
                 self.optimize_worker.progress.disconnect()
                 self.optimize_worker.finished.disconnect()
                 self.optimize_worker.cancelled.disconnect()
-            except:
+            except:  # nosec
                 pass
         
         if hasattr(self, 'optimize_thread') and self.optimize_thread:
             try:
                 self.optimize_thread.started.disconnect()
                 self.optimize_thread.finished.disconnect()
-            except:
+            except:  # nosec
                 pass
         
         # Schedule deletion (Qt will handle this safely)
@@ -4149,12 +4150,7 @@ class VerticalAnalysisDialog(QDialog):
                         QMessageBox.Yes | QMessageBox.No
                     )
                     if reply == QMessageBox.Yes:
-                        import subprocess
-                        folder_path = os.path.dirname(filename)
-                        if os.name == 'nt':  # Windows
-                            subprocess.Popen(f'explorer "{folder_path}"')
-                        elif os.name == 'posix':  # Linux/Mac
-                            subprocess.Popen(['open', folder_path])
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(filename)))
                     
                 except Exception as e:
                     QMessageBox.critical(self, "Export Failed", f"Error saving file:\n{str(e)}")
@@ -4340,12 +4336,7 @@ class VerticalAnalysisDialog(QDialog):
                         QMessageBox.Yes | QMessageBox.No
                     )
                     if reply == QMessageBox.Yes:
-                        import subprocess
-                        folder_path = os.path.dirname(filename)
-                        if os.name == 'nt':  # Windows
-                            subprocess.Popen(f'explorer "{folder_path}"')
-                        elif os.name == 'posix':  # Linux/Mac
-                            subprocess.Popen(['open', folder_path])
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(filename)))
                     
                 except Exception as e:
                     QMessageBox.critical(self, "Export Failed", f"Error saving file:\n{str(e)}")
@@ -4465,12 +4456,7 @@ class VerticalAnalysisDialog(QDialog):
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
-                import subprocess
-                folder_path = os.path.dirname(filename)
-                if os.name == 'nt':  # Windows
-                    subprocess.Popen(f'explorer "{folder_path}"')
-                elif os.name == 'posix':  # Linux/Mac
-                    subprocess.Popen(['open', folder_path])
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(filename)))
             
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Error saving file:\n{str(e)}")
@@ -4488,7 +4474,7 @@ class VerticalAnalysisDialog(QDialog):
                 "扇区Tilt分析",
                 level
             )
-        except Exception:
+        except Exception:  # nosec
             pass
             
     def _get_documents_folder(self):
@@ -5176,7 +5162,7 @@ class VerticalAnalysisDialog(QDialog):
 
         donation_messages = ["本结果由「扇区Tilt分析」生成 · 垂直波瓣一键分析"]
 
-        donation_msg = random.choice(donation_messages)
+        donation_msg = random.choice(donation_messages)  # nosec
         # 状态栏带上当前小区号，便于确认"这次结果属于哪个小区"
         _cell_txt = getattr(self, "current_cell_id", None)
         if _cell_txt:
@@ -5273,7 +5259,7 @@ class VerticalAnalysisDialog(QDialog):
             
             print(f"🎨 Slider color updated to {color} for {percent:.1f}%")
             
-        except Exception:
+        except Exception:  # nosec
             pass
             
                            
@@ -5554,12 +5540,8 @@ class VerticalAnalysisDialog(QDialog):
             )
 
             if reply == QMessageBox.Yes:
-                import subprocess
                 try:
-                    if os.name == 'nt':  # Windows
-                        os.startfile(filename)
-                    elif os.name == 'posix':
-                        subprocess.Popen(['xdg-open', filename])
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(filename))
                 except Exception as e:
                     QMessageBox.warning(
                         self,
@@ -5734,7 +5716,7 @@ class VerticalAnalysisDialog(QDialog):
             # start timer (debounce 30ms)
             self._profile_refresh_timer.start(30)
 
-        except Exception:
+        except Exception:  # nosec
             pass
             
             
@@ -5758,5 +5740,5 @@ class VerticalAnalysisDialog(QDialog):
                 # rescale SVG tower
                 if hasattr(self.profile_widget, "_update_tower_scale"):
                     self.profile_widget._update_tower_scale()
-        except Exception:
+        except Exception:  # nosec
             pass

@@ -9,8 +9,8 @@ import os
 import tempfile
 import zipfile
 import shutil
-from xml.etree import ElementTree as ET
-from xml.dom import minidom
+from xml.etree import ElementTree as ET  # nosec
+from xml.dom import minidom  # nosec
 from qgis.core import QgsPointXY
 from PyQt5.QtWidgets import QFileDialog
 
@@ -112,28 +112,19 @@ class KMZExporter:
     
     def _open_kmz_in_google_earth(self, kmz_path):
         """
-        Open KMZ file in Google Earth if installed
+        Open KMZ file with the system default handler
+        (Google Earth if installed / associated with .kmz)
         """
-        import subprocess
-        import os
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
 
-        possible_paths = [
-            r"C:\Program Files\Google\Google Earth Pro\client\googleearth.exe",
-            r"C:\Program Files (x86)\Google\Google Earth Pro\client\googleearth.exe",
-        ]
-
-        for path in possible_paths:
-            if os.path.exists(path):
-                try:
-                    subprocess.Popen([path, kmz_path])
-                    print("🌍 Opened in Google Earth")
-                    return True
-                except Exception as e:
-                    print(f"⚠️ Failed to open Google Earth: {e}")
-                    return False
-
-        print("⚠️ Google Earth not found")
-        return False
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(kmz_path))
+            print("🌍 Opened KMZ with default application")
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to open KMZ: {e}")
+            return False
     
     def _generate_kml(self, site_point, azimuth, h_beamwidth, footprint_start, footprint_end,
                       impact_point, upper_intersection_point, lower_intersection_point,

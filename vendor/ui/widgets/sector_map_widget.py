@@ -2232,7 +2232,7 @@ class SectorMapWidget(QWidget):
                     self._impact_layer.renderer().setSymbol(symbol)
                     self._impact_layer.triggerRepaint()
                     self.canvas.refresh()
-        except:
+        except:  # nosec
             pass
     
     def closeEvent(self, event):

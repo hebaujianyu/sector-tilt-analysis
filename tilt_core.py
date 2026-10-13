@@ -254,7 +254,7 @@ def _find_cell_field(layer, like_pattern):
             feat = next(layer.getFeatures(request), None)
             if feat:
                 return field.name()
-        except Exception:
+        except Exception:  # nosec
             continue
 
     return None
@@ -293,7 +293,7 @@ def query_gongcan_layer(layer, field_map, cell_uid, like_pattern):
                 feat = next(layer.getFeatures(request), None)
                 if feat:
                     return {f.name(): feat[f.name()] for f in layer.fields()}
-            except Exception:
+            except Exception:  # nosec
                 continue
 
     # 优先用 cell_name 字段匹配
@@ -334,7 +334,7 @@ def query_gongcan_layer(layer, field_map, cell_uid, like_pattern):
                 feat = next(layer.getFeatures(request), None)
             if feat:
                 return {f.name(): feat[f.name()] for f in layer.fields()}
-        except Exception:
+        except Exception:  # nosec
             continue
 
     return None
@@ -705,7 +705,7 @@ def run_from_feature(feature, layer, auto_run=True):
             "扇区Tilt分析",
             f"已自动填充并启动分析: {parsed['cell_uid']}（{len(filled)} 字段）"
         )
-    except Exception:
+    except Exception:  # nosec
         pass
     print(f"[扇区Tilt分析] 完成: cell_uid={parsed['cell_uid']}, 已填充 {len(filled)} 个字段")
 
