@@ -666,48 +666,129 @@ def run_from_feature(feature, layer, auto_run=True):
     # 5.5 提取 RF 参数
     values = extract_site_values(site_dict, field_map)
 
-    # 5.6 启动 扇区Tilt分析
+    # 5.6~5.9 启动对话框 → 填充 → 自动运行
+    _apply_and_run(values, values.get("cell_name"), parsed["cell_uid"])
+
+
+# ============================================================================
+# 5b. 公共：启动对话框 → 填充控件 → (自动)运行分析
+# ============================================================================
+
+def _apply_and_run(values, cell_name, unique_id=None):
+    """
+    run_from_feature / run_from_selection 共用的「尾段」：
+      启动(或复用) 扇区Tilt分析 对话框 → 填充控件 → (auto_run) 自动执行分析。
+    """
+    # 启动对话框
     try:
         dialog, status = find_or_launch_dialog()
     except Exception as e:
         QMessageBox.critical(None, "扇区Tilt分析", f"启动垂直分析失败:\n{e}")
         return
 
-    # 5.6.1 在窗口标题栏显示当前小区号 + 小区名称（不经过分析链路，即时同步）
-    #        —— 用于区分「选择问题」还是「筛选/绘制问题」
+    # 在窗口标题栏显示当前小区号 + 小区名称（即时同步，不进分析链路）
     try:
         _status_txt = {"created": "新开", "reused": "复用"}.get(status, str(status))
-        _cell_name = values.get("cell_name")
-        dialog.set_cell_info(unique_id, extra=_status_txt, cell_name=_cell_name)
-        print(f"[扇区Tilt分析] 标题已更新 → 小区 {unique_id}（{_status_txt}） 名称={_cell_name}")
+        dialog.set_cell_info(unique_id or "选中/手动", extra=_status_txt,
+                             cell_name=cell_name)
+        print(f"[扇区Tilt分析] 标题已更新 → {unique_id}（{_status_txt}） 名称={cell_name}")
     except Exception:
         import traceback
         traceback.print_exc()
 
-    # 5.7 填充控件
+    # 填充控件
     filled = fill_dialog(dialog, values)
 
-    # 5.8 自动出结果：填充后程序化触发 扇区Tilt分析 的 Run Analysis
-    if auto_run:
-        try:
-            QApplication.processEvents()   # 让 fill_dialog 的 valueChanged 落定
-            dialog.run_analysis()          # 等价手动点击 Run Analysis
-        except Exception as e:
-            QMessageBox.warning(
-                None, "扇区Tilt分析",
-                f"参数已自动填充，但自动分析失败，请手动点 Run Analysis：\n{e}"
-            )
+    # 自动出结果：填充后程序化触发 Run Analysis
+    try:
+        QApplication.processEvents()   # 让 fill_dialog 的 valueChanged 落定
+        dialog.run_analysis()          # 等价手动点击 Run Analysis
+    except Exception as e:
+        QMessageBox.warning(
+            None, "扇区Tilt分析",
+            f"参数已自动填充，但自动分析失败，请手动点 Run Analysis：\n{e}"
+        )
 
-    # 5.9 完成提示
+    # 完成提示
     try:
         from qgis.utils import iface
         iface.messageBar().pushInfo(
             "扇区Tilt分析",
-            f"已自动填充并启动分析: {parsed['cell_uid']}（{len(filled)} 字段）"
+            f"已自动填充并启动分析: {unique_id or cell_name or '选中要素'}（{len(filled)} 字段）"
         )
     except Exception:  # nosec
         pass
-    print(f"[扇区Tilt分析] 完成: cell_uid={parsed['cell_uid']}, 已填充 {len(filled)} 个字段")
+    print(f"[扇区Tilt分析] 完成: cell={unique_id}, 已填充 {len(filled)} 个字段")
+
+
+# ============================================================================
+# 5c. 选中小区自动展现：从选中要素直接取 经纬度 + RF 参数
+# ============================================================================
+
+def run_from_selection(feature, layer, auto_run=True):
+    """
+    选中要素后自动展现：不依赖小区号/工参层查找，直接从选中要素取
+      经纬度（字段优先，否则几何质心重投影到 WGS84）+ RF 参数（字段匹配），
+      启动 扇区Tilt分析 对话框并自动运行。
+    """
+    if feature is None or not feature.isValid():
+        return
+
+    fields = list(layer.fields())
+
+    # 1) 经纬度：优先字段，否则几何质心(重投影到 EPSG:4326)
+    lat = lon = None
+    lon_f = _match_field(fields, FIELD_CANDIDATES["longitude"])
+    lat_f = _match_field(fields, FIELD_CANDIDATES["latitude"])
+    if lon_f and lat_f:
+        try:
+            lon = float(feature[lon_f])
+            lat = float(feature[lat_f])
+        except (ValueError, TypeError, KeyError):
+            lon = lat = None
+
+    if lat is None or lon is None:
+        try:
+            geom = feature.geometry()
+            if geom is not None and not geom.isEmpty():
+                centroid = geom.centroid().asPoint()
+                src_crs = layer.crs()
+                if src_crs is not None and src_crs.authid() != "EPSG:4326":
+                    from qgis.core import QgsCoordinateTransform, QgsProject
+                    xform = QgsCoordinateTransform(
+                        src_crs,
+                        QgsProject.instance().crsFromAuthId("EPSG:4326"),
+                        QgsProject.instance()
+                    )
+                    pt = xform.transform(centroid)
+                else:
+                    pt = centroid
+                lon, lat = pt.x(), pt.y()
+        except Exception:  # nosec
+            pass
+
+    if lat is None or lon is None:
+        QMessageBox.warning(
+            None, "扇区Tilt分析",
+            "选中要素无法获取经纬度（既没有经纬度字段，几何质心计算也失败）。"
+        )
+        return
+
+    # 2) RF 参数：直接用要素字段做候选名匹配
+    feat_dict = {f.name(): feature[f.name()] for f in fields}
+    values = extract_site_values(feat_dict, {})
+    values["latitude"] = lat
+    values["longitude"] = lon
+
+    # 小区名称兜底
+    cell_name = values.get("cell_name")
+    if not cell_name:
+        for key in ("cellname", "小区名", "name", "Name", "CellName"):
+            if key in feat_dict and feat_dict[key] not in (None, ""):
+                cell_name = str(feat_dict[key])
+                break
+
+    _apply_and_run(values, cell_name, cell_name or f"选中({layer.name()})")
 
 
 def run_from_primary(layer_id, feature_id):
