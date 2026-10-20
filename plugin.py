@@ -46,7 +46,8 @@ class SectorTiltMAuto:
         self.iface = iface
         self.action = None          # 点选分析
         self.action_sel = None      # 选中小区自动展现
-        self.action_ring = None     # 环向剖面分析
+        self.action_ring = None     # 环向剖面分析（工具箱 Tab2）
+        self.action_main = None     # 工具箱主界面（多标签）
         self.map_tool = None
         self.plugin_dir = os.path.dirname(__file__)
 
@@ -104,6 +105,30 @@ class SectorTiltMAuto:
         )
         self.action_ring.triggered.connect(self.on_ring)
         self.iface.addToolBarIcon(self.action_ring)
+
+        # 4) 工具箱主界面（多标签）—— 一键打开扇区Tilt分析 + 环向剖面
+        self.action_main = QAction(
+            icon, "Tilt分析工具箱", self.iface.mainWindow()
+        )
+        self.action_main.setToolTip(
+            "打开扇区Tilt分析工具箱：扇区Tilt分析 / 环向剖面分析（45°×8）多标签界面"
+        )
+        self.action_main.triggered.connect(self.on_open_main)
+        self.iface.addToolBarIcon(self.action_main)
+
+    # ------------------------------------------------------------------
+    # 工具箱主界面（多标签）
+    # ------------------------------------------------------------------
+    def on_open_main(self):
+        try:
+            from .main_dialog import get_or_create_main
+        except Exception as e:  # nosec
+            self.iface.messageBar().pushCritical(
+                "扇区Tilt分析", f"工具箱加载失败:\n{e}"
+            )
+            return
+        main = get_or_create_main(parent=self.iface.mainWindow())
+        main.activate_tilt_tab()
 
     # ------------------------------------------------------------------
     # 点选分析
@@ -185,15 +210,16 @@ class SectorTiltMAuto:
     # 环向剖面分析
     # ------------------------------------------------------------------
     def on_ring(self):
+        # 改为打开「工具箱主界面」并切到「环向剖面」标签页（多标签整合）
         try:
-            from .ring_profile_dialog import RingProfileDialog
+            from .main_dialog import get_or_create_main
         except Exception as e:  # nosec
             self.iface.messageBar().pushCritical(
-                "扇区Tilt分析", f"环向剖面对话框加载失败:\n{e}"
+                "扇区Tilt分析", f"工具箱加载失败:\n{e}"
             )
             return
-        dlg = RingProfileDialog(parent=self.iface.mainWindow())
-        dlg.show()
+        main = get_or_create_main(parent=self.iface.mainWindow())
+        main.activate_ring_tab()
 
     # ------------------------------------------------------------------
     def unload(self):
@@ -203,6 +229,8 @@ class SectorTiltMAuto:
             self.iface.removeToolBarIcon(self.action_sel)
         if self.action_ring is not None:
             self.iface.removeToolBarIcon(self.action_ring)
+        if self.action_main is not None:
+            self.iface.removeToolBarIcon(self.action_main)
 
         # 断开选中模式绑定
         self.sel_enabled = False

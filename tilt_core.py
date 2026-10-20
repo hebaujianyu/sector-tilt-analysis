@@ -370,16 +370,23 @@ def extract_site_values(feature_dict, field_map):
 # 4. 扇区Tilt分析 对话框（基于源码分析）
 # ============================================================================
 
-def find_or_launch_dialog():
-    """查找或启动 扇区Tilt分析 对话框（绕过 splash 动画）"""
-    # 4.1 查找已打开的对话框
-    for w in QApplication.topLevelWidgets():
-        if type(w).__name__ == "VerticalAnalysisDialog" and w.isVisible():
-            w.raise_()
-            w.activateWindow()
-            return w, "reused"
+def _ensure_controller(dialog):
+    """确保 vertical_dialog 已绑定垂直分析引擎 controller。
 
-    # 4.2 创建新对话框（需要至少一个栅格图层）
+    已绑定则跳过（仅刷新 basemap 列表，因为项目图层可能变化）；
+    未绑定则查找 DEM 栅格 → 创建 VerticalAnalysisModule → 赋值 controller
+    → 刷新 basemap 列表。缺 DEM 时抛 RuntimeError（沿用原硬约束）。
+    """
+    if getattr(dialog, "controller", None) is not None:
+        refresh = getattr(dialog, CONFIG["basemap_refresh_method"], None)
+        if callable(refresh):
+            try:
+                refresh()
+                QApplication.processEvents()
+            except Exception as e:
+                print(f"[扇区Tilt分析] basemap 刷新: {e}")
+        return
+
     dem_layer = _find_dem_layer()
     if dem_layer is None:
         raise RuntimeError(
@@ -389,17 +396,9 @@ def find_or_launch_dialog():
         )
 
     from .vendor.modules.vertical_analysis.module import VerticalAnalysisModule
-    from .vendor.ui.dialogs.vertical_analysis_dialog import VerticalAnalysisDialog
-
-    from qgis.utils import iface
     module = VerticalAnalysisModule(dem_layer)
-    dialog = VerticalAnalysisDialog(parent=iface.mainWindow())
     dialog.controller = module.controller
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
 
-    # 让 show 事件跑完（basemap 列表在 show/showEvent 中填充）
     QApplication.processEvents()
     refresh = getattr(dialog, CONFIG["basemap_refresh_method"], None)
     if callable(refresh):
@@ -409,7 +408,27 @@ def find_or_launch_dialog():
         except Exception as e:
             print(f"[扇区Tilt分析] basemap 刷新: {e}")
 
-    return dialog, "created"
+
+def find_or_launch_dialog():
+    """查找或启动 扇区Tilt分析 对话框（多标签工具箱模式）。
+
+    优先复用工具箱主界面(MainToolDialog)内的 tilt_dialog 子实例；
+    若工具箱未打开，自动创建并打开（DEM 检查仍走 _ensure_controller）。
+    """
+    from .main_dialog import MainToolDialog, get_or_create_main
+
+    main = MainToolDialog._instance
+    opened = False
+    if main is None or not isinstance(main, MainToolDialog):
+        main = get_or_create_main()
+        opened = True
+
+    vd = main.tilt_dialog
+    _ensure_controller(vd)          # DEM 检查 + 创建 module + 刷新 basemap
+    main.activate_tilt_tab()
+    main.raise_()
+    main.activateWindow()
+    return vd, ("created" if opened else "reused")
 
 
 def _find_dem_layer():
