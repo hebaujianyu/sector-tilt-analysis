@@ -28,17 +28,25 @@ from .tilt_core import run_from_feature, run_from_selection
 
 
 class ClickTool(QgsMapToolIdentify):
-    """点击画布即发射 canvasClicked(QgsPointXY, Qt.MouseButton)。
+    """点击画布即发射 canvasClicked(results, Qt.MouseButton)。
 
-    继承 QgsMapToolIdentify：on_canvas_click 里用官方 identify() 找要素，
-    自动处理「画布坐标系 → 图层坐标系」转换、点击容差与多图层遍历
-    （原手写 setFilterRect 未做 CRS 转换，投影坐标系下永远找不到要素）。
+    继承 QgsMapToolIdentify：在 canvasReleaseEvent 里直接调用官方
+    identifyMapEvent(event) 识别要素，自动按「画布识别容差 + CRS 转换」处理、
+    遍历所有可见图层。这比手写 identify(point) 更可靠——
+    投影坐标系 / 容差组合下也能稳定命中要素（原 identify(point) 在
+    投影系下识别容差易为 0，点到要素附近也经常落空）。
     """
     canvasClicked = pyqtSignal(object, object)
 
     def canvasReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.canvasClicked.emit(event.mapPoint(), event.button())
+        if event.button() != Qt.LeftButton:
+            return
+        # 官方识别入口：自动处理 CRS 转换、识别容差与多图层遍历
+        try:
+            results = self.identifyMapEvent(event)
+        except Exception:  # nosec
+            results = []
+        self.canvasClicked.emit(results, event.button())
 
 
 class SectorTiltMAuto:
@@ -141,19 +149,12 @@ class SectorTiltMAuto:
             if canvas.mapTool() == self.map_tool:
                 canvas.unsetMapTool(self.map_tool)
 
-    def on_canvas_click(self, point, button):
+    def on_canvas_click(self, results, button):
         if button != Qt.LeftButton:
             return
 
-        # 官方 identify：自动处理 CRS 转换 + 容差，遍历所有可见图层
-        try:
-            results = self.map_tool.identify(
-                point, QgsMapToolIdentify.IdentifyMode.TopDownAll
-            )
-        except Exception:  # nosec
-            results = []
-
-        for res in results:
+        # results 来自 ClickTool.identifyMapEvent：已按 CRS + 容差处理
+        for res in (results or []):
             try:
                 layer = res.mLayer
                 feat = res.mFeature

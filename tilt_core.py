@@ -390,9 +390,10 @@ def _ensure_controller(dialog):
     dem_layer = _find_dem_layer()
     if dem_layer is None:
         raise RuntimeError(
-            "当前项目中没有栅格图层。\n"
-            "扇区Tilt分析 需要至少一个栅格图层（即使使用 Open-Meteo 在线 DEM）。\n"
-            "请先加载一个 DEM 栅格或任意栅格底图。"
+            "扇区Tilt分析 需要项目里至少有一个【真正的 DEM 栅格图层】\n"
+            "（如 SRTM / ASTER / 本地高程 tif），仅加载 sanwei / 三维 / OSM 等\n"
+            "底图不算——引擎会拒绝底图、且在线 Open-Meteo 仍需一个栅格对象作锚点。\n\n"
+            "解决：在 QGIS 加载任意一个 DEM 栅格后重试。"
         )
 
     from .vendor.modules.vertical_analysis.module import VerticalAnalysisModule
@@ -716,6 +717,17 @@ def _apply_and_run(values, cell_name, unique_id=None):
     except Exception:
         import traceback
         traceback.print_exc()
+
+    # 嵌入模式下 tilt_dialog 的 setWindowTitle 不可见，
+    # 改为更新工具箱主窗口标题，让用户在界面上确认当前加载的是哪个小区
+    try:
+        from .main_dialog import MainToolDialog
+        _main = MainToolDialog._instance
+        if _main is not None and isinstance(_main, MainToolDialog):
+            _label = unique_id or cell_name or "选中要素"
+            _main.setWindowTitle(f"扇区Tilt分析工具箱｜{_label}")
+    except Exception:  # nosec
+        pass
 
     # 填充控件
     filled = fill_dialog(dialog, values)
