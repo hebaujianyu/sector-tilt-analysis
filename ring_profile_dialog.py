@@ -197,8 +197,13 @@ class RingProfileDialog(QDialog):
         top.addLayout(right, 1)
 
         if pg is not None:
-            self.profile_pw = pg.PlotWidget(title="8 方向地形剖面 (相对站点地面, m)")
-            self.rose_pw = pg.PlotWidget(title="阻挡玫瑰图 (半径=首次遮挡距离)")
+            # 白底黑字，跟随 QGIS 浅色主题（默认黑底在浅色主题下不可读）
+            self.profile_pw = pg.PlotWidget(
+                title="8 方向地形剖面 (相对站点地面, m)", background="w"
+            )
+            self.rose_pw = pg.PlotWidget(
+                title="阻挡玫瑰图 (半径=首次遮挡距离)", background="w"
+            )
             self.profile_pw.setMinimumHeight(260)
             self.rose_pw.setMinimumHeight(300)
             right.addWidget(self.profile_pw)
@@ -325,12 +330,30 @@ class RingProfileDialog(QDialog):
 
         source = "local" if self.source_combo.currentIndex() == 0 else "online"
         dem = _find_dem_layer()
+
+        from .vendor.core.terrain.terrain_sampler import TerrainSampler
         if dem is None:
-            QMessageBox.warning(
-                self, "环向剖面",
-                "当前项目需要至少一个栅格图层（DEM 或底图）作为地形源。"
-            )
-            return
+            if source == "online":
+                # 在线 Open-Meteo 路径不使用本地 DEM，可绕过构造检查
+                import threading as _threading
+                sampler = object.__new__(TerrainSampler)
+                sampler.dem = None
+                sampler._cache = {}
+                sampler._cache_lock = _threading.Lock()
+                sampler._cache_access_time = {}
+            else:
+                QMessageBox.warning(
+                    self, "环向剖面",
+                    "本地 DEM 模式需要项目中加载一个高程栅格图层；\n"
+                    "若没有本地 DEM，请将「地形源」切换为 Open-Meteo (在线)。"
+                )
+                return
+        else:
+            try:
+                sampler = TerrainSampler(dem)
+            except Exception as e:
+                QMessageBox.warning(self, "环向剖面", f"地形采样器初始化失败:\n{e}")
+                return
 
         height = self.height_sb.value()
         total_tilt = self.mech_sb.value() + self.elec_sb.value()
@@ -338,14 +361,6 @@ class RingProfileDialog(QDialog):
         step = max(1, self.step_sb.value())
         azimuths = [i * 45 for i in range(8)]
         site = QgsPointXY(lon, lat)
-
-        # 在线模式下，仅用 DEM 满足构造要求（实际不走本地采样）
-        from .vendor.core.terrain.terrain_sampler import TerrainSampler
-        try:
-            sampler = TerrainSampler(dem)
-        except Exception as e:
-            QMessageBox.warning(self, "环向剖面", f"地形采样器初始化失败:\n{e}")
-            return
 
         self.status_lbl.setText("正在采样 8 个方向地形剖面，请稍候…")
         self.btn_generate.setEnabled(False)

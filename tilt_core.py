@@ -620,11 +620,13 @@ def run_from_feature(feature, layer, auto_run=True):
         QMessageBox.warning(None, "扇区Tilt分析", "未在要素中找到小区号(UniqueID)字段！")
         return
 
-    # 5.2 解析小区号
+    # 5.2 解析小区号；解析失败(如字段值是 '2' 这类非 gNB-Cell 格式)时，
+    #     不再致命报错，回退为「要素直取」模式（直接用当前要素的经纬度+RF 参数）
     try:
         parsed = parse_cell_id(unique_id)
     except ValueError as e:
-        QMessageBox.critical(None, "扇区Tilt分析", str(e))
+        print(f"[扇区Tilt分析] {e} → 回退为要素直取模式(run_from_selection)")
+        run_from_selection(feature, layer, auto_run=True)
         return
 
     print(f"[扇区Tilt分析] 小区号={unique_id} → cell_uid={parsed['cell_uid']}")

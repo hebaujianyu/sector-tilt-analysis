@@ -19,19 +19,26 @@ import os
 
 from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 
-from qgis.core import (
-    QgsVectorLayer, QgsFeatureRequest, QgsRectangle
-)
-from qgis.gui import QgsMapToolEmitPoint
+from qgis.core import QgsVectorLayer
+from qgis.gui import QgsMapToolIdentify
 
 from .tilt_core import run_from_feature, run_from_selection
 
 
-class ClickTool(QgsMapToolEmitPoint):
-    """点击画布即发射 canvasClicked(QgsPointXY, Qt.MouseButton)。"""
-    pass
+class ClickTool(QgsMapToolIdentify):
+    """点击画布即发射 canvasClicked(QgsPointXY, Qt.MouseButton)。
+
+    继承 QgsMapToolIdentify：on_canvas_click 里用官方 identify() 找要素，
+    自动处理「画布坐标系 → 图层坐标系」转换、点击容差与多图层遍历
+    （原手写 setFilterRect 未做 CRS 转换，投影坐标系下永远找不到要素）。
+    """
+    canvasClicked = pyqtSignal(object, object)
+
+    def canvasReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.canvasClicked.emit(event.mapPoint(), event.button())
 
 
 class SectorTiltMAuto:
@@ -113,20 +120,21 @@ class SectorTiltMAuto:
         if button != Qt.LeftButton:
             return
 
-        canvas = self.iface.mapCanvas()
+        # 官方 identify：自动处理 CRS 转换 + 容差，遍历所有可见图层
+        try:
+            results = self.map_tool.identify(
+                point, QgsMapToolIdentify.IdentifyMode.TopDownAll
+            )
+        except Exception:  # nosec
+            results = []
 
-        r = canvas.mapSettings().mapUnitsPerPixel() * 6.0
-        rect = QgsRectangle(
-            point.x() - r, point.y() - r,
-            point.x() + r, point.y() + r
-        )
-
-        for layer in canvas.layers():
-            if not isinstance(layer, QgsVectorLayer):
+        for res in results:
+            try:
+                layer = res.mLayer
+                feat = res.mFeature
+            except AttributeError:  # nosec
                 continue
-            req = QgsFeatureRequest().setFilterRect(rect).setLimit(1)
-            feat = next(layer.getFeatures(req), None)
-            if feat and feat.isValid():
+            if isinstance(layer, QgsVectorLayer) and feat.isValid():
                 run_from_feature(feat, layer, auto_run=True)
                 return
 
