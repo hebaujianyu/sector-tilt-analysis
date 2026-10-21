@@ -24,9 +24,11 @@ from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 
+# 注意：QgsMapTool 属于 qgis.gui，绝不能从 qgis.core 导入
+# （0.4.0 误从 qgis.core 导入导致模块加载失败、classFactory 报错）
 from qgis.core import (
-    QgsVectorLayer, QgsMapTool, QgsFeatureRequest, QgsRectangle,
-    QgsPointXY, QgsGeometry, QgsCoordinateTransform, QgsProject
+    QgsVectorLayer, QgsFeatureRequest, QgsRectangle,
+    QgsGeometry, QgsCoordinateTransform, QgsProject
 )
 from qgis.gui import QgsMapTool
 

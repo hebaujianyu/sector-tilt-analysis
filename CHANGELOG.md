@@ -2,6 +2,13 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.2] - 2026-10-21
+
+### 修复（插件无法加载：classFactory() 报错）
+- **根因**：0.4.0 重写 `plugin.py` 时把 `QgsMapTool` 写成从 `qgis.core` 导入（它属于 `qgis.gui`），模块导入即抛 ImportError，QGIS 报「无法加载插件 sector_tiltm_auto 因在调用其 classFactory() 方法时发生错误」。
+- 修正为仅从 `qgis.gui` 导入 `QgsMapTool`；`qgis.core` 只保留 QgsVectorLayer / QgsFeatureRequest / QgsRectangle / QgsGeometry / QgsCoordinateTransform / QgsProject（移除未再使用的 QgsPointXY）。
+- 已全量复查本插件（含 vendor）所有 `from qgis.*` 导入，无同类的 core/gui 混用问题。
+
 ## [0.4.1] - 2026-10-21
 
 ### 变更（45×8 小剖面逐项对齐 Tab1 原版截图，用户确认版式）
