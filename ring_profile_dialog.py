@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 # ============================================================================
-# ring_profile_dialog.py — 环向剖面分析 (45° × 8 方向)
+# ring_profile_dialog.py — 环向剖面分析 (45° × 8 方向, 3×3 九宫格)
 #
 # 给定经纬度(天线挂高 + 机械/电子下倾)，对 8 个方向(每 45°)采样地形剖面，
-# 计算「首次地形遮挡距离」与「最大山体高度」，并用 pyqtgraph 渲染：
-#   - Tab「8方向剖面图」：2×4 八宫格，每方向一张独立剖面图
-#     （地形填充 + 主波束中心虚线 + 红点标记首次遮挡点，标题写结论）
-#   - Tab「阻挡玫瑰图」：极坐标（半径=首次遮挡距离，红=被遮挡/绿=畅通）
-#   - 底：8 方向汇总表（含失败方向）
+# 计算「首次地形遮挡距离」与「最大山体高度」。
+#
+# 界面 = 3×3 九宫格（罗盘方位排布）：
+#   NW | N  | NE
+#   W  |玫瑰| E      ← 中心放阻挡玫瑰图（半径=首次遮挡距离）
+#   SW | S  | SE
+# 每张剖面图移植原垂直分析（TerrainProfileWidget）的配色语义：
+#   地形分段着色：绿=强信号(低于波束) / 橙=弱(贴近波束±5m) / 红=阴影(高于波束)；
+#   主波束=绿色实线；黑竖线=塔桅+天线挂高；红点=首次遮挡点。
 #
 # 设计要点：
 #   * 方向标签一律按 result["az"]（方位角）映射，不按下标——避免个别方向
@@ -24,7 +28,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QGridLayout, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QHeaderView,
-    QWidget, QTabWidget
+    QWidget
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -153,7 +157,7 @@ class RingProfileDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("环向剖面分析 (45° × 8 方向)")
-        self.resize(1150, 780)
+        self.resize(1200, 860)
         self._results = []
         self._failures = []
         self._worker = None
@@ -238,41 +242,51 @@ class RingProfileDialog(QDialog):
 
         top.addWidget(params_gb)
 
-        # ---- 右侧绘图区（标签页：八宫格独立剖面 / 阻挡玫瑰图）----
+        # ---- 右侧绘图区：3×3 九宫格（8 方向剖面按罗盘方位 + 中心玫瑰图）----
         right = QVBoxLayout()
         top.addLayout(right, 1)
 
         if pg is not None:
-            self.tabs = QTabWidget()
-            right.addWidget(self.tabs, 1)
-
-            # Tab A：2×4 八宫格 —— 每方向一张独立剖面图
-            tab_grid = QWidget()
-            grid = QGridLayout(tab_grid)
+            grid_holder = QWidget()
+            grid = QGridLayout(grid_holder)
             grid.setSpacing(4)
+            # 罗盘方位排布：索引 = azimuth // 45
+            #   (0,0)NW (0,1)N (0,2)NE
+            #   (1,0)W  (1,1)玫瑰 (1,2)E
+            #   (2,0)SW (2,1)S (2,2)SE
+            POS = {0: (0, 1), 1: (0, 2), 2: (1, 2), 3: (2, 2),
+                   4: (2, 1), 5: (2, 0), 6: (1, 0), 7: (0, 0)}
             self._mini = []
             for i in range(8):
                 pw = pg.PlotWidget(background="w")
-                pw.setMinimumHeight(175)
+                pw.setMinimumHeight(190)
                 pw.showGrid(x=True, y=True, alpha=0.25)
-                pw.setLabel("bottom", "距离 (m)")
-                if i % 4 == 0:
+                # 性能优化（与 vendor TerrainProfileWidget 一致）
+                pw.setClipToView(True)
+                pw.setDownsampling(auto=True)
+                r, c = POS[i]
+                # 只在边缘行/列显示轴刻度与标签，节省九宫格空间
+                if c == 0:
                     pw.setLabel("left", "高程 (m)")
-                r, c = divmod(i, 4)
+                else:
+                    pw.getAxis("left").setStyle(showValues=False)
+                if r == 2:
+                    pw.setLabel("bottom", "距离 (m)")
+                else:
+                    pw.getAxis("bottom").setStyle(showValues=False)
                 grid.addWidget(pw, r, c)
                 self._mini.append(pw)
-            self.tabs.addTab(tab_grid, "8方向剖面图")
 
-            # Tab B：阻挡玫瑰图
-            self.rose_pw = pg.PlotWidget(
-                title="阻挡玫瑰图 (半径=首次遮挡距离, 灰圈=最大距离)",
-                background="w"
-            )
-            self.tabs.addTab(self.rose_pw, "阻挡玫瑰图")
-            self.tabs.setCurrentIndex(0)
+            # 中心：阻挡玫瑰图
+            self.rose_pw = pg.PlotWidget(background="w")
+            self.rose_pw.setAspectLocked(True)
+            self.rose_pw.hideAxis("left")
+            self.rose_pw.hideAxis("bottom")
+            grid.addWidget(self.rose_pw, 1, 1)
+            right.addWidget(grid_holder, 1)
         else:
-            self.tabs = None
             self.rose_pw = None
+            self._mini = []
             right.addWidget(QLabel(
                 "⚠️ 本环境未安装 pyqtgraph，无法绘制图表（仍可在下方表格查看结果）。"
             ))
@@ -526,30 +540,69 @@ class RingProfileDialog(QDialog):
         if self.rose_pw is not None:
             self._render_rose(results, user_max)
 
+    @staticmethod
+    def _terrain_segments(dists, elevs, beam, weak_margin=5.0):
+        """移植 vendor TerrainProfileWidget 的地形分段着色语义。
+
+        按每个采样点地形与主波束中心线的关系分三段：
+          绿 (0,180,0)   — 地形低于波束 5m 以上（强信号）
+          橙 (255,180,0) — 地形贴近波束 ±5m 内（弱/临界）
+          红 (200,0,0)   — 地形高于波束（阴影/被挡）
+        返回 [(xs, ys, color), ...] 便于逐段 plot。
+        """
+        def classify(e, b):
+            if e > b:
+                return (200, 0, 0)
+            if e >= b - weak_margin:
+                return (255, 180, 0)
+            return (0, 180, 0)
+
+        segs = []
+        cur = classify(elevs[0], beam[0])
+        xs, ys = [dists[0]], [elevs[0]]
+        for d, e, b in zip(dists[1:], elevs[1:], beam[1:]):
+            c = classify(e, b)
+            if c != cur:
+                xs.append(d)
+                ys.append(e)  # 分界点两端共用
+                segs.append((xs, ys, cur))
+                cur = c
+                xs, ys = [d], [e]
+            else:
+                xs.append(d)
+                ys.append(e)
+        segs.append((xs, ys, cur))
+        return segs
+
     def _draw_mini(self, pw, res, user_max):
         az = res["az"]
-        col = AZ_TO_COLOR.get(az, "#333333")
         label = AZ_TO_LABEL.get(az, f"{az}°")
         dists, elevs, beam = res["dists"], res["elevs"], res["beam"]
         fo = res["first_occ"]
         clear = fo >= user_max
+        sg = res["site_ground"]
+        h = self.height_sb.value()
 
-        c = QColor(col)
-        c.setAlpha(70)
-        pw.plot(dists, elevs, pen=pg.mkPen(color=col, width=1.5),
-                fillLevel=min(elevs), fillBrush=pg.mkBrush(c))
-        # 主波束中心线（黑虚线）
-        pw.plot(dists, beam,
-                pen=pg.mkPen(color="#000000", width=1.5, style=Qt.DashLine))
+        # 地形填充（浅棕，仿原版地形底色）
+        pw.plot(dists, elevs, pen=None,
+                fillLevel=min(elevs), fillBrush=pg.mkBrush(139, 69, 19, 45))
+        # 分段着色地形（绿=强 / 橙=弱 / 红=阴影，移植 vendor 配色）
+        for xs, ys, col in self._terrain_segments(dists, elevs, beam):
+            pw.plot(xs, ys, pen=pg.mkPen(col, width=2))
+        # 主波束中心线（vendor 同款绿色实线）
+        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=2))
+        # 塔桅 + 天线挂高点（黑竖线 + 黑点）
+        pw.plot([0, 0], [sg, sg + h], pen=pg.mkPen("k", width=2))
+        pw.addItem(pg.ScatterPlotItem(
+            x=[0], y=[sg + h], size=8,
+            pen=None, brush=pg.mkBrush("k")))
         # 首次遮挡点（红点）
         if not clear:
             idx = min(range(len(dists)), key=lambda k: abs(dists[k] - fo))
-            sc = pg.ScatterPlotItem(
+            pw.addItem(pg.ScatterPlotItem(
                 x=[dists[idx]], y=[elevs[idx]], size=12,
                 pen=pg.mkPen("#d62728", width=2),
-                brush=pg.mkBrush("#d62728")
-            )
-            pw.addItem(sc)
+                brush=pg.mkBrush("#d62728")))
 
         title = (f"{label} — 全程畅通" if clear
                  else f"{label} — {fo:.0f} m 处遮挡")
@@ -568,9 +621,7 @@ class RingProfileDialog(QDialog):
     def _render_rose(self, results, user_max):
         pw = self.rose_pw
         pw.clear()
-        pw.setAspectLocked(True)
-        pw.hideAxis("left")
-        pw.hideAxis("bottom")
+        pw.setTitle("阻挡玫瑰图\n(半径=首次遮挡距离)")
 
         # 参考圈（0.25/0.5/0.75/1.0 × 最大距离）
         for frac in (0.25, 0.5, 0.75, 1.0):
