@@ -35,16 +35,16 @@ class MainToolDialog(QDialog):
         self.setWindowTitle("扇区Tilt分析工具箱")
         self.plugin = None          # SectorTiltMAuto 实例，由 on_open_main 注入
 
-        # 窗口自适应屏幕：不超过可用区域 95%×92%，防止内容撑大跳变
+        # 窗口尺寸（用户要求）：宽度 = 屏幕宽的 3/5，高度 = 与屏幕同高
+        # （availableGeometry 已扣除任务栏；仅限制上限防溢出，不限制内容撑大）
         try:
             from qgis.PyQt.QtWidgets import QApplication
             screen = QApplication.desktop().availableGeometry()
-            self.resize(min(1180, int(screen.width() * 0.95)),
-                        min(840, int(screen.height() * 0.92)))
-            self.setMaximumSize(screen.width(), screen.height() - 30)
+            self.resize(int(screen.width() * 3 / 5), screen.height())
+            self.setMaximumSize(screen.width(), screen.height())
         except Exception:  # nosec
-            self.resize(1180, 840)
-        self.setMinimumSize(880, 600)
+            self.resize(1150, 900)
+        self.setMinimumSize(760, 560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)

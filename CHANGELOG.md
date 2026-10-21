@@ -2,6 +2,11 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.6] - 2026-10-21
+
+### 变更（按用户要求调整工具箱窗口尺寸）
+- 工具箱弹窗：**宽度 = 屏幕宽的 3/5，高度 = 与屏幕同高**（availableGeometry，已扣任务栏）；仍设屏幕级 MaximumSize 防溢出。
+
 ## [0.4.5] - 2026-10-21
 
 ### 修复（英文报错 "The RF analysis engine failed to initialize"）
