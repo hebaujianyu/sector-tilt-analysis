@@ -569,40 +569,6 @@ class RingProfileDialog(QDialog):
         if self.rose_pw is not None:
             self._render_rose(results, user_max)
 
-    @staticmethod
-    def _terrain_segments(dists, elevs, beam, weak_margin=5.0):
-        """移植 vendor TerrainProfileWidget 的地形分段着色语义。
-
-        按每个采样点地形与主波束中心线的关系分三段：
-          绿 (0,180,0)   — 地形低于波束 5m 以上（强信号）
-          橙 (255,180,0) — 地形贴近波束 ±5m 内（弱/临界）
-          红 (200,0,0)   — 地形高于波束（阴影/被挡）
-        返回 [(xs, ys, color), ...] 便于逐段 plot。
-        """
-        def classify(e, b):
-            if e > b:
-                return (200, 0, 0)
-            if e >= b - weak_margin:
-                return (255, 180, 0)
-            return (0, 180, 0)
-
-        segs = []
-        cur = classify(elevs[0], beam[0])
-        xs, ys = [dists[0]], [elevs[0]]
-        for d, e, b in zip(dists[1:], elevs[1:], beam[1:]):
-            c = classify(e, b)
-            if c != cur:
-                xs.append(d)
-                ys.append(e)  # 分界点两端共用
-                segs.append((xs, ys, cur))
-                cur = c
-                xs, ys = [d], [e]
-            else:
-                xs.append(d)
-                ys.append(e)
-        segs.append((xs, ys, cur))
-        return segs
-
     def _draw_mini(self, pw, res, user_max):
         az = res["az"]
         label = AZ_TO_LABEL.get(az, f"{az}°")
@@ -612,40 +578,64 @@ class RingProfileDialog(QDialog):
         sg = res["site_ground"]
         h = self.height_sb.value()
 
-        # 与 vendor TerrainProfileWidget 同款图层顺序：
-        # 棕色地形底线(w2) → 分段着色描线(w3) → 主波束绿实线(w2) →
-        # 上/下波束蓝/红虚线(总下倾±垂直波束宽度/2) → 塔桅 → 标记
-        pw.plot(dists, elevs, pen=pg.mkPen("brown", width=2))
-        for xs, ys, col in self._terrain_segments(dists, elevs, beam):
-            pw.plot(xs, ys, pen=pg.mkPen(col, width=3))
-        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=2))
+        # ---- 地形（Tab1 同款：赭黄实填充 + 红棕脊线）----
+        pw.plot(dists, elevs, pen=pg.mkPen("#A0522D", width=2),
+                fillLevel=min(elevs),
+                fillBrush=pg.mkBrush(205, 133, 63, 170))
 
-        # 上/下波束边缘（Tab1 图例同款：上=蓝虚线，下=红虚线）
+        # ---- 主波束（绿实线）+ 上/下波束（蓝/红虚线，总下倾±垂直波束宽度/2）----
         tilt = res.get("tilt",
                        self.mech_sb.value() + self.elec_sb.value())
         vbw = getattr(self, "_last_vbw", self.vbw_sb.value())
-        h = self.height_sb.value()
         ang_u = max(min(tilt - vbw / 2.0, 89.5), -89.5)
         ang_l = max(min(tilt + vbw / 2.0, 89.5), -89.5)
         upper = [sg + h - d * math.tan(math.radians(ang_u)) for d in dists]
         lower = [sg + h - d * math.tan(math.radians(ang_l)) for d in dists]
+        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=2))
         pw.plot(dists, upper,
                 pen=pg.mkPen("#185FA5", width=1.5, style=Qt.DashLine))
         pw.plot(dists, lower,
                 pen=pg.mkPen("#A32D2D", width=1.5, style=Qt.DashLine))
 
-        # 塔桅 + 天线挂高点（黑竖线 + 黑点）
-        pw.plot([0, 0], [sg, sg + h], pen=pg.mkPen("k", width=2))
+        # ---- 塔桅（Tab1 同款铁塔造型：两条收边线 + 三道横撑 + 塔顶黑点）----
+        base_half = max(user_max * 0.012, 5.0)
+        for sgn in (-1, 1):
+            pw.plot([sgn * base_half, 0], [sg, sg + h],
+                    pen=pg.mkPen("k", width=1))
+        for frac in (0.25, 0.55, 0.85):
+            y = sg + h * frac
+            xw = base_half * (1.0 - frac)
+            pw.plot([-xw, xw], [y, y], pen=pg.mkPen("k", width=1))
         pw.addItem(pg.ScatterPlotItem(
             x=[0], y=[sg + h], size=8,
             pen=None, brush=pg.mkBrush("k")))
-        # 首次遮挡点（红点）
+
+        # ---- 波束-地形交点（上=蓝点 / 下=红点，对应 Tab1 覆盖图 RF Legend）----
+        def _first_cross(line):
+            for d, e, lv in zip(dists, elevs, line):
+                if d > 1 and e > lv:
+                    return d, e
+            return None, None
+
+        for line, color in ((upper, "#185FA5"), (lower, "#A32D2D")):
+            cd, ce = _first_cross(line)
+            if cd is not None:
+                pw.addItem(pg.ScatterPlotItem(
+                    x=[cd], y=[ce], size=8,
+                    pen=pg.mkPen(color, width=1.5),
+                    brush=pg.mkBrush(color)))
+
+        # ---- 首次遮挡点（红点 + 距离标注，对应 Tab1 的 "246 m" 标签）----
         if not clear:
             idx = min(range(len(dists)), key=lambda k: abs(dists[k] - fo))
             pw.addItem(pg.ScatterPlotItem(
                 x=[dists[idx]], y=[elevs[idx]], size=12,
-                pen=pg.mkPen("#d62728", width=2),
-                brush=pg.mkBrush("#d62728")))
+                pen=pg.mkPen("#A32D2D", width=2),
+                brush=pg.mkBrush("#A32D2D")))
+            ti = pg.TextItem(f"{fo:.0f} m", color="#A32D2D",
+                             anchor=(0.5, 1.15))
+            ti.setPos(dists[idx], elevs[idx])
+            pw.addItem(ti)
 
         title = (f"{label} — 全程畅通" if clear
                  else f"{label} — {fo:.0f} m 处遮挡")
