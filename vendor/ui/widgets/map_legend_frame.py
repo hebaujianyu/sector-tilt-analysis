@@ -25,7 +25,9 @@ QFrame based legend untuk Sector Map yang bisa di-drag.
 Menampilkan legend static (hardcoded).
 """
 
-from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import (
+    QFrame, QLabel, QVBoxLayout, QHBoxLayout, QWidget
+)
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QBrush
 

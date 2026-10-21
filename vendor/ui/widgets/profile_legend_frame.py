@@ -25,7 +25,9 @@ QFrame based legend untuk Visual Profile yang bisa di-drag.
 Menampilkan legend static untuk beam lines.
 """
 
-from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import (
+    QFrame, QLabel, QVBoxLayout, QHBoxLayout, QWidget
+)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 

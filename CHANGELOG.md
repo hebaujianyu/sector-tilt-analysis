@@ -2,6 +2,14 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.3] - 2026-10-21
+
+### 修复（打开工具箱即 NameError + 潜伏的间歇性采样失败）
+- **`QGridLayout` 未导入**：v0.3.6 移除九宫格时把它从导入列表删了，v0.4.0 恢复九宫格忘了加回 → 打开工具箱时在 `_build_ui` 抛 `NameError: QGridLayout`。已加回导入。
+- **vendor `terrain_sampler.py` 间歇性崩溃（潜伏 bug）**：在线 Open-Meteo 采样走 `except queue.Empty` 分支时用了未导入的 `QtCore.QTimer` → NameError，表现为个别方向偶发「采样失败」（如之前 N 方向失败）。改用模块级已导入的 `QTimer`。
+- **vendor legend 组件未导入 `QWidget`**：`profile_legend_frame.py` / `map_legend_frame.py` 执行到 `QWidget().setLayout(...)` 会 NameError。已补导入。
+- 新增**全插件 AST 未定义名字静态扫描**（py_compile 只能查语法，查不出这类运行时 NameError），全量扫描后 0 残留。
+
 ## [0.4.2] - 2026-10-21
 
 ### 修复（插件无法加载：classFactory() 报错）

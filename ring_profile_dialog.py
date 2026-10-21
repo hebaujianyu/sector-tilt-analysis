@@ -30,7 +30,7 @@ import math
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
-    QLabel, QLineEdit, QDoubleSpinBox, QSpinBox, QPushButton,
+    QGridLayout, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QHeaderView,
     QWidget, QScrollArea, QApplication
 )

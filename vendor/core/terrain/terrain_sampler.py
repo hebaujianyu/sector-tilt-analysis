@@ -285,7 +285,7 @@ class TerrainSampler:
                         callback(result, None)
                 except queue.Empty:
                     # Schedule again
-                    QtCore.QTimer.singleShot(100, check_result)
+                    QTimer.singleShot(100, check_result)
             
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(100, check_result)
