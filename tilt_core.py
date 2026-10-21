@@ -12,6 +12,7 @@
 #   - DEM 默认在线(Open-Meteo)
 # ============================================================================
 
+import os
 import re
 from qgis.PyQt.QtCore import QVariant
 from qgis.PyQt.QtWidgets import QApplication, QMessageBox, QInputDialog
@@ -470,6 +471,54 @@ def extract_site_values(feature_dict, field_map):
 # 4. 扇区Tilt分析 对话框（基于源码分析）
 # ============================================================================
 
+def _create_dem_anchor():
+    """生成/复用 1×1 微型 GeoTIFF 锚点图层（项目无 DEM 时兜底）。
+
+    背景：垂直分析引擎初始化需要一个有效 QgsRasterLayer 对象，在线
+    Open-Meteo 模式也如此（仅作锚点，不参与高程采样）。项目里没有任何
+    可用栅格时，此前直接报 "RF analysis engine failed to initialize /
+    missing DEM layer"，基础功能被卡死。
+
+    本函数用 QGIS 自带 GDAL 在临时目录写一个 1×1、EPSG:4326 的 tif，
+    加载为 QgsRasterLayer（不加入图层树、不污染项目），模块级持引用防 GC。
+    名称刻意避开 basemap 关键字（map/bing/osm 等），避免被引擎拒绝。
+    注意：若用户切到「本地 DEM」模式，锚点仅 1 像素、高程无意义——
+    本地分析请加载真 DEM。
+    """
+    global _dem_anchor
+    if _dem_anchor is not None and _dem_anchor.isValid():
+        return _dem_anchor
+
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), "sector_tiltm_dem_anchor.tif")
+    if not os.path.exists(path):
+        try:
+            from osgeo import gdal, osr
+        except Exception:
+            return None   # 连 GDAL 都没有 → 交回上层给出准确提示
+        drv = gdal.GetDriverByName("GTiff")
+        if drv is None:
+            return None
+        ds = drv.Create(path, 1, 1, 1, gdal.GDT_Float32)
+        if ds is None:
+            return None
+        ds.SetGeoTransform([116.0, 0.01, 0.0, 40.0, 0.0, -0.01])
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        ds.SetProjection(srs.ExportToWkt())
+        ds.GetRasterBand(1).WriteArray([[0.0]])
+        ds.FlushCache()
+        ds = None
+
+    from qgis.core import QgsRasterLayer
+    lyr = QgsRasterLayer(path, "DEM_在线模式锚点")
+    _dem_anchor = lyr if lyr.isValid() else None
+    return _dem_anchor
+
+
+_dem_anchor = None
+
+
 def _ensure_controller(dialog):
     """确保 vertical_dialog 已绑定垂直分析引擎 controller。
 
@@ -489,11 +538,16 @@ def _ensure_controller(dialog):
 
     dem_layer = _find_dem_layer()
     if dem_layer is None:
+        # 项目没有任何非底图栅格 → 自动生成 1×1 微型锚点（在线模式仅作锚点），
+        # 不再让引擎初始化失败卡死基础功能。
+        dem_layer = _create_dem_anchor()
+    if dem_layer is None:
         raise RuntimeError(
-            "扇区Tilt分析 需要项目里至少有一个【真正的 DEM 栅格图层】\n"
+            "扇区Tilt分析 初始化需要至少一个【真正的 DEM 栅格图层】\n"
             "（如 SRTM / ASTER / 本地高程 tif），仅加载 sanwei / 三维 / OSM 等\n"
-            "底图不算——引擎会拒绝底图、且在线 Open-Meteo 仍需一个栅格对象作锚点。\n\n"
-            "解决：在 QGIS 加载任意一个 DEM 栅格后重试。"
+            "底图不算——引擎会拒绝底图。\n\n"
+            "本次自动生成微型锚点也失败了（GDAL 不可用），\n"
+            "请在 QGIS 加载任意一个 DEM 栅格后重试。"
         )
 
     from .vendor.modules.vertical_analysis.module import VerticalAnalysisModule

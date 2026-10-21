@@ -2,17 +2,20 @@
 # ============================================================================
 # plugin.py — 扇区一键 Tilt 分析 (QGIS 插件主体)
 #
-# 功能入口：
-#   1) 工具栏按钮（可勾选）→ 切换「点选分析」画布工具：
-#      在地图上点击任意矢量要素（扇区 / 工参层 / 站点层），插件自动解析
-#      小区号 → 发现工参层 → 提取 RF 参数 → 弹垂直波瓣分析对话框并自动跑。
-#   2) 工具栏按钮（可勾选）→ 「选中小区自动展现」：
-#      选中图层中 1 个要素即自动取经纬度 + RF 参数并展现（无需点选/小区号）。
-#   3) 工具栏按钮 → 「环向剖面分析(45°×8)」：
-#      给定经纬度，生成 8 个方向(每 45°)的地形剖面与阻挡玫瑰图。
+# 工具栏只保留 1 个图标「Tilt分析工具箱」；点选/选中/环向剖面全部收进工具箱：
+#   - 「点选扇区分析」开关 → 进入地图点选模式（PickTool）
+#   - 「分析选中小区」按钮 → 对当前图层选中要素执行分析
+#   - Tab1 扇区Tilt分析 / Tab2 环向剖面(45°×8)
 #
-# 本插件已内嵌垂直波瓣分析引擎（vendor/），
-# 不再依赖任何外部插件，也不依赖联网（DEM 走 Open-Meteo 在线）。
+# PickTool 识别方式：手写几何查找——画布点击点 → 容差矩形(10 像素) →
+# 转各矢量图层 CRS → QgsFeatureRequest.setFilterRect → 取距点击点最近的要素。
+# 不依赖 QgsMapToolIdentify.identify/identifyMapEvent（identifyMapEvent 在
+# QGIS 3.x Python API 中并不存在，旧版调用被 except 吞掉导致永远"未找到要素"）。
+#
+# DEM 说明：Tab1 引擎初始化需要一个有效栅格对象作锚点（在线 Open-Meteo 模式
+# 也一样）。项目里没有 DEM 栅格时，tilt_core._ensure_controller 会自动生成
+# 1×1 微型 GeoTIFF 锚点（见 _create_dem_anchor），不再弹
+# "RF analysis engine failed to initialize"。
 # ============================================================================
 
 import os
@@ -21,47 +24,89 @@ from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 
-from qgis.core import QgsVectorLayer
-from qgis.gui import QgsMapToolIdentify
+from qgis.core import (
+    QgsVectorLayer, QgsMapTool, QgsFeatureRequest, QgsRectangle,
+    QgsPointXY, QgsGeometry, QgsCoordinateTransform, QgsProject
+)
+from qgis.gui import QgsMapTool
 
 from .tilt_core import run_from_feature, run_from_selection
 
 
-class ClickTool(QgsMapToolIdentify):
-    """点击画布即发射 canvasClicked(results, Qt.MouseButton)。
+class PickTool(QgsMapTool):
+    """地图点选工具：手写几何查找，命中「距点击点最近的矢量要素」。
 
-    继承 QgsMapToolIdentify：在 canvasReleaseEvent 里直接调用官方
-    identifyMapEvent(event) 识别要素，自动按「画布识别容差 + CRS 转换」处理、
-    遍历所有可见图层。这比手写 identify(point) 更可靠——
-    投影坐标系 / 容差组合下也能稳定命中要素（原 identify(point) 在
-    投影系下识别容差易为 0，点到要素附近也经常落空）。
+    旧版继承 QgsMapToolIdentify 并调用 identifyMapEvent(event)——该方法在
+    QGIS 3.x Python API 中不存在，AttributeError 被 except 吞掉后结果永远
+    为空，表现为"该位置未找到矢量要素"。本版改为确定性几何查找：
+      1. 点击点 → 画布 CRS 下 10 像素容差矩形
+      2. 矩形 → 各可见矢量图层 CRS（transformBoundingBox）
+      3. setFilterRect 粗筛 → 逐要素算到点击点的几何距离 → 取最近
     """
-    canvasClicked = pyqtSignal(object, object)
+    canvasClicked = pyqtSignal(object, object, object)  # (layer, feature, button)
+
+    TOLERANCE_PX = 10
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.setCursor(Qt.CrossCursor)
 
     def canvasReleaseEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        # 官方识别入口：自动处理 CRS 转换、识别容差与多图层遍历
-        try:
-            results = self.identifyMapEvent(event)
-        except Exception:  # nosec
-            results = []
-        self.canvasClicked.emit(results, event.button())
+        layer, feat = self._find_feature(event.mapPoint())
+        self.canvasClicked.emit(layer, feat, event.button())
+
+    # ------------------------------------------------------------------
+    def _find_feature(self, map_point):
+        canvas = self.canvas()
+        mupp = canvas.mapUnitsPerPixel()
+        tol = max(mupp * self.TOLERANCE_PX, 1e-9)
+        rect = QgsRectangle(
+            map_point.x() - tol, map_point.y() - tol,
+            map_point.x() + tol, map_point.y() + tol
+        )
+        crs_map = canvas.mapSettings().destinationCrs()
+        project = QgsProject.instance()
+
+        best_layer, best_feat, best_dist = None, None, None
+        for layer in canvas.layers():
+            if not isinstance(layer, QgsVectorLayer):
+                continue
+            if not layer.isVisible():
+                continue
+            try:
+                xform = QgsCoordinateTransform(crs_map, layer.crs(), project)
+                lyr_rect = xform.transformBoundingBox(rect)
+                pt_lyr = xform.transform(map_point)
+            except Exception:  # nosec — CRS 转换失败按同 CRS 处理
+                lyr_rect, pt_lyr = rect, map_point
+
+            click_geom = QgsGeometry.fromPointXY(pt_lyr)
+            req = QgsFeatureRequest().setFilterRect(lyr_rect)
+            try:
+                for feat in layer.getFeatures(req):
+                    geom = feat.geometry()
+                    if geom is None or geom.isEmpty():
+                        continue
+                    try:
+                        d = geom.distance(click_geom)
+                    except Exception:  # nosec
+                        d = 0.0
+                    if best_dist is None or d < best_dist:
+                        best_layer, best_feat, best_dist = layer, feat, d
+            except Exception:  # nosec — 空间索引/过滤异常跳过该图层
+                continue
+
+        return best_layer, best_feat
 
 
 class SectorTiltMAuto:
     def __init__(self, iface):
         self.iface = iface
-        self.action = None          # 点选分析
-        self.action_sel = None      # 选中小区自动展现
-        self.action_ring = None     # 环向剖面分析（工具箱 Tab2）
-        self.action_main = None     # 工具箱主界面（多标签）
+        self.action_main = None     # 工具栏唯一图标：Tilt分析工具箱
         self.map_tool = None
         self.plugin_dir = os.path.dirname(__file__)
-
-        # 选中自动展现状态
-        self.sel_enabled = False
-        self._sel_layer = None
 
     # ------------------------------------------------------------------
     def initGui(self):
@@ -70,62 +115,21 @@ class SectorTiltMAuto:
             icon_path = os.path.join(self.plugin_dir, "icon.svg")
         icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
 
-        # 1) 点选分析（可勾选）
-        self.action = QAction(
-            icon, "扇区一键Tilt分析", self.iface.mainWindow()
-        )
-        self.action.setCheckable(True)
-        self.action.setToolTip(
-            "点击扇区：自动把工参传入并启动垂直波瓣分析（DEM 在线）"
-        )
-        self.action.toggled.connect(self.on_toggled)
-        self.iface.addToolBarIcon(self.action)
-
-        self.map_tool = ClickTool(self.iface.mapCanvas())
-        self.map_tool.canvasClicked.connect(self.on_canvas_click)
-        self.map_tool.deactivated.connect(
-            lambda: self.action.setChecked(False)
-        )
-
-        # 2) 选中小区自动展现（可勾选）
-        self.action_sel = QAction(
-            icon, "选中小区自动展现", self.iface.mainWindow()
-        )
-        self.action_sel.setCheckable(True)
-        self.action_sel.setToolTip(
-            "选中矢量图层中 1 个要素即自动取经纬度与 RF 参数并展现剖面"
-        )
-        self.action_sel.toggled.connect(self.on_sel_toggled)
-        self.iface.addToolBarIcon(self.action_sel)
-
-        # 当前图层切换时，若开启选中模式则重新绑定 selectionChanged
-        try:
-            self.iface.currentLayerChanged.connect(self._on_current_layer_changed)
-        except Exception:  # nosec
-            pass
-
-        # 3) 环向剖面分析（45°×8）
-        self.action_ring = QAction(
-            icon, "环向剖面分析(45°×8)", self.iface.mainWindow()
-        )
-        self.action_ring.setToolTip(
-            "给定经纬度，生成 8 个方向(每 45°)的地形剖面与阻挡玫瑰图"
-        )
-        self.action_ring.triggered.connect(self.on_ring)
-        self.iface.addToolBarIcon(self.action_ring)
-
-        # 4) 工具箱主界面（多标签）—— 一键打开扇区Tilt分析 + 环向剖面
-        self.action_main = QAction(
-            icon, "Tilt分析工具箱", self.iface.mainWindow()
-        )
+        self.action_main = QAction(icon, "Tilt分析工具箱", self.iface.mainWindow())
         self.action_main.setToolTip(
-            "打开扇区Tilt分析工具箱：扇区Tilt分析 / 环向剖面分析（45°×8）多标签界面"
+            "扇区Tilt分析工具箱：\n"
+            "· Tab1 扇区Tilt分析（点选/选中小区自动填参出图）\n"
+            "· Tab2 环向剖面分析(45°×8)\n"
+            "· 工具箱内可开关「点选扇区分析」地图模式"
         )
         self.action_main.triggered.connect(self.on_open_main)
         self.iface.addToolBarIcon(self.action_main)
 
+        self.map_tool = PickTool(self.iface.mapCanvas())
+        self.map_tool.canvasClicked.connect(self.on_canvas_click)
+
     # ------------------------------------------------------------------
-    # 工具箱主界面（多标签）
+    # 工具箱
     # ------------------------------------------------------------------
     def on_open_main(self):
         try:
@@ -136,116 +140,53 @@ class SectorTiltMAuto:
             )
             return
         main = get_or_create_main(parent=self.iface.mainWindow())
+        main.plugin = self          # 工具箱点选/选中按钮回调本插件
         main.activate_tilt_tab()
 
     # ------------------------------------------------------------------
-    # 点选分析
+    # 点选模式（由工具箱开关触发）
     # ------------------------------------------------------------------
-    def on_toggled(self, checked):
+    def set_pick_mode(self, enabled):
         canvas = self.iface.mapCanvas()
-        if checked:
+        if enabled:
             canvas.setMapTool(self.map_tool)
         else:
             if canvas.mapTool() == self.map_tool:
                 canvas.unsetMapTool(self.map_tool)
 
-    def on_canvas_click(self, results, button):
+    def on_canvas_click(self, layer, feat, button):
         if button != Qt.LeftButton:
             return
-
-        # results 来自 ClickTool.identifyMapEvent：已按 CRS + 容差处理
-        for res in (results or []):
-            try:
-                layer = res.mLayer
-                feat = res.mFeature
-            except AttributeError:  # nosec
-                continue
-            if isinstance(layer, QgsVectorLayer) and feat.isValid():
-                run_from_feature(feat, layer, auto_run=True)
-                return
-
+        if isinstance(layer, QgsVectorLayer) and feat is not None and feat.isValid():
+            run_from_feature(feat, layer, auto_run=True)
+            return
         self.iface.messageBar().pushWarning(
             "扇区Tilt分析",
-            "该位置未找到矢量要素，请点击扇区 / 工参 / 站点图层。"
+            "该位置未找到矢量要素，请先在图层树选中扇区/工参图层并确保其可见。"
         )
 
     # ------------------------------------------------------------------
-    # 选中小区自动展现
+    # 选中小区分析（由工具箱按钮触发）
     # ------------------------------------------------------------------
-    def on_sel_toggled(self, checked):
-        self.sel_enabled = checked
-        self._connect_selection(checked)
-
-    def _connect_selection(self, enabled):
-        # 先断开旧绑定
-        if self._sel_layer is not None:
-            try:
-                self._sel_layer.selectionChanged.disconnect(self._on_selection_changed)
-            except Exception:  # nosec
-                pass
-            self._sel_layer = None
-
-        if not enabled:
-            return
-
-        layer = self.iface.activeLayer()
-        if isinstance(layer, QgsVectorLayer):
-            layer.selectionChanged.connect(self._on_selection_changed)
-            self._sel_layer = layer
-
-    def _on_current_layer_changed(self, layer):
-        if self.sel_enabled:
-            self._connect_selection(True)
-
-    def _on_selection_changed(self):
-        if not self.sel_enabled:
-            return
+    def analyze_selected(self):
         layer = self.iface.activeLayer()
         if not isinstance(layer, QgsVectorLayer):
-            return
-        selected = layer.selectedFeatures()
-        if len(selected) == 1:
-            run_from_selection(selected[0], layer, auto_run=True)
-
-    # ------------------------------------------------------------------
-    # 环向剖面分析
-    # ------------------------------------------------------------------
-    def on_ring(self):
-        # 改为打开「工具箱主界面」并切到「环向剖面」标签页（多标签整合）
-        try:
-            from .main_dialog import get_or_create_main
-        except Exception as e:  # nosec
-            self.iface.messageBar().pushCritical(
-                "扇区Tilt分析", f"工具箱加载失败:\n{e}"
+            self.iface.messageBar().pushWarning(
+                "扇区Tilt分析", "请先在图层树中激活一个矢量图层。"
             )
             return
-        main = get_or_create_main(parent=self.iface.mainWindow())
-        main.activate_ring_tab()
+        selected = layer.selectedFeatures()
+        if len(selected) != 1:
+            self.iface.messageBar().pushWarning(
+                "扇区Tilt分析", f"请选中恰好 1 个要素（当前 {len(selected)} 个）。"
+            )
+            return
+        run_from_feature(selected[0], layer, auto_run=True)
 
     # ------------------------------------------------------------------
     def unload(self):
-        if self.action is not None:
-            self.iface.removeToolBarIcon(self.action)
-        if self.action_sel is not None:
-            self.iface.removeToolBarIcon(self.action_sel)
-        if self.action_ring is not None:
-            self.iface.removeToolBarIcon(self.action_ring)
         if self.action_main is not None:
             self.iface.removeToolBarIcon(self.action_main)
-
-        # 断开选中模式绑定
-        self.sel_enabled = False
-        if self._sel_layer is not None:
-            try:
-                self._sel_layer.selectionChanged.disconnect(self._on_selection_changed)
-            except Exception:  # nosec
-                pass
-            self._sel_layer = None
-        try:
-            self.iface.currentLayerChanged.disconnect(self._on_current_layer_changed)
-        except Exception:  # nosec
-            pass
-
         if self.map_tool is not None:
             canvas = self.iface.mapCanvas()
             if canvas.mapTool() == self.map_tool:

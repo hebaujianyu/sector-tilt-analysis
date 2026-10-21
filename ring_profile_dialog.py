@@ -1,25 +1,27 @@
 # -*- coding: utf-8 -*-
 # ============================================================================
-# ring_profile_dialog.py — 环向剖面分析 (45° × 8 方向)
+# ring_profile_dialog.py — 环向剖面分析 (45° × 8 方向, 方案C 布局)
 #
-# 给定经纬度(天线挂高 + 机械/电子下倾)，对 8 个方向(每 45°)采样地形剖面，
-# 计算「首次地形遮挡距离」与「最大山体高度」。
+# 给定经纬度(天线挂高 + 机械/电子下倾 + 垂直波束宽度)，对 8 个方向(每 45°)
+# 采样地形剖面，计算「首次地形遮挡距离」与「最大山体高度」。
 #
-# 界面布局（窗口自适应屏幕、不跳变）：
-#   左列（固定宽）：参数区（上）+ 8 张分方向小剖面图（滚动区，超出滚动显示）
-#   右侧：阻挡玫瑰图（大图，半径=首次遮挡距离）
-#   底部：8 方向汇总表
+# 界面布局（方案C，窗口自适应屏幕、不跳变）：
+#   左列（固定宽）：参数区（上）+ 8 方向汇总表（下）
+#   右侧：3×3 九宫格 —— 8 张分方向剖面图按罗盘方位排布，中心放阻挡玫瑰图
+#     NW | N  | NE
+#     W  |玫瑰| E
+#     SW | S  | SE
 #
-# 小剖面图移植原垂直分析（TerrainProfileWidget）的画法：
-#   棕色地形底线 + 分段着色描线：绿=强信号(低于波束5m以上) /
-#   橙=弱(贴近波束±5m) / 红=阴影(高于波束)；主波束=绿色实线；
+# 剖面图画法 = Tab1 同款（对齐其波束图例）：
+#   棕色地形底线 + 分段着色：绿=强(低于波束5m以上) / 橙=弱(贴近±5m) / 红=阴影；
+#   主波束=绿实线；上波束=蓝虚线；下波束=红虚线（上/下边缘由
+#   总下倾 ± 垂直波束宽度/2 求得，垂直波束宽度优先取要素字段，否则默认 7°）；
 #   黑竖线=塔桅+天线挂高；红点=首次遮挡点。
 #
 # 设计要点：
-#   * 方向标签一律按 result["az"]（方位角）映射，不按下标——避免个别方向
-#     采样失败被跳过后，其余方向全部错位。
+#   * 方向标签一律按 result["az"]（方位角）映射，不按下标。
 #   * 单方向采样失败只记入 failures，不中断整轮；进度实时回传状态栏。
-#   * 「被遮挡」判定 = 首次遮挡距离 < 用户设定的最大距离（而非结果集最大值）。
+#   * 「被遮挡」判定 = 首次遮挡距离 < 用户设定的最大距离。
 #
 # 复用内嵌 TerrainSampler（本地 DEM / Open-Meteo 在线），无需额外依赖。
 # ============================================================================
@@ -110,6 +112,7 @@ def compute_ring(sampler, site, azimuths, max_d, step, source,
             "site_ground": site_ground,
             "first_occ": first_occ,
             "max_hill": max_hill,
+            "tilt": total_tilt,
         })
         if progress_cb:
             if first_occ >= max_d:
@@ -178,6 +181,8 @@ class RingProfileDialog(QDialog):
         top = QHBoxLayout()
         main.addLayout(top)
 
+        left_col = QVBoxLayout()
+
         # ---- 左侧参数区 ----
         params_gb = QGroupBox("参数")
         form = QFormLayout(params_gb)
@@ -205,6 +210,16 @@ class RingProfileDialog(QDialog):
         self.elec_sb.setValue(3)
         self.elec_sb.setSuffix("°")
 
+        self.vbw_sb = QDoubleSpinBox()
+        self.vbw_sb.setRange(1, 90)
+        self.vbw_sb.setDecimals(1)
+        self.vbw_sb.setValue(7.0)
+        self.vbw_sb.setSuffix("°")
+        self.vbw_sb.setToolTip(
+            "垂直波束宽度：用于画上/下波束虚线（Tab1 同款）。\n"
+            "「从选中要素获取」时若图层有垂直波束宽度字段会自动带入。"
+        )
+
         self.maxdist_sb = QSpinBox()
         self.maxdist_sb.setRange(100, 10000)
         self.maxdist_sb.setSingleStep(100)
@@ -226,6 +241,7 @@ class RingProfileDialog(QDialog):
         form.addRow("天线挂高:", self.height_sb)
         form.addRow("机械下倾:", self.mech_sb)
         form.addRow("电子下倾:", self.elec_sb)
+        form.addRow("垂直波束宽度:", self.vbw_sb)
         form.addRow("最大距离:", self.maxdist_sb)
         form.addRow("采样步长:", self.step_sb)
         form.addRow("地形源:", self.source_combo)
@@ -247,57 +263,65 @@ class RingProfileDialog(QDialog):
         form.addRow(self.status_lbl)
 
         params_gb.setMinimumWidth(350)
-        top.addWidget(params_gb)
+        left_col.addWidget(params_gb)
 
-        # ---- 参数下侧：分方向遮挡分析（8 张小剖面图，滚动区防撑窗）----
-        if pg is not None:
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setFixedWidth(370)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            scroll.setStyleSheet("QScrollArea{border:none;}")
-            inner = QWidget()
-            v = QVBoxLayout(inner)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(4)
-            self._mini = []
-            for i in range(8):
-                pw = pg.PlotWidget(background="w")
-                pw.setMinimumHeight(155)
-                pw.showGrid(x=True, y=True, alpha=0.25)
-                # 性能优化（与 vendor TerrainProfileWidget 一致）
-                pw.setClipToView(True)
-                pw.setDownsampling(auto=True)
-                v.addWidget(pw)
-                self._mini.append(pw)
-            v.addStretch(1)
-            scroll.setWidget(inner)
-            top.addWidget(scroll, 1)
-
-        # ---- 右侧：阻挡玫瑰图（大图）----
-        if pg is not None:
-            self.rose_pw = pg.PlotWidget(background="w")
-            self.rose_pw.setAspectLocked(True)
-            self.rose_pw.hideAxis("left")
-            self.rose_pw.hideAxis("bottom")
-            top.addWidget(self.rose_pw, 2)
-        else:
-            self.rose_pw = None
-            self._mini = []
-            top.addWidget(QLabel(
-                "⚠️ 本环境未安装 pyqtgraph，无法绘制图表（仍可在下方表格查看结果）。"
-            ))
-
-        # ---- 底部汇总表（固定 8 行，失败方向也显示）----
+        # ---- 左列下方：8 方向汇总表（方案C：挪到参数下侧）----
         self.table = QTableWidget(8, 4)
         self.table.setHorizontalHeaderLabels(
-            ["方向", "首次遮挡距离 (m)", "最大山体高度 (m)", "结论"]
+            ["方向", "遮挡 (m)", "山体 (m)", "结论"]
         )
         hdr = self.table.horizontalHeader()
         if hdr is not None:
             hdr.setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setMaximumHeight(200)
-        main.addWidget(self.table)
+        left_col.addWidget(self.table, 1)
+
+        # ---- 右侧：3×3 九宫格（8 方向剖面按罗盘方位 + 中心玫瑰图）----
+        if pg is not None:
+            grid_holder = QWidget()
+            grid = QGridLayout(grid_holder)
+            grid.setSpacing(4)
+            # 罗盘方位排布：索引 = azimuth // 45
+            #   (0,0)NW (0,1)N (0,2)NE
+            #   (1,0)W  (1,1)玫瑰 (1,2)E
+            #   (2,0)SW (2,1)S (2,2)SE
+            POS = {0: (0, 1), 1: (0, 2), 2: (1, 2), 3: (2, 2),
+                   4: (2, 1), 5: (2, 0), 6: (1, 0), 7: (0, 0)}
+            self._mini = []
+            for i in range(8):
+                pw = pg.PlotWidget(background="w")
+                pw.setMinimumHeight(170)
+                pw.showGrid(x=True, y=True, alpha=0.25)
+                # 性能优化（与 vendor TerrainProfileWidget 一致）
+                pw.setClipToView(True)
+                pw.setDownsampling(auto=True)
+                r, c = POS[i]
+                # 只在边缘行/列显示轴刻度与标签，节省九宫格空间
+                if c == 0:
+                    pw.setLabel("left", "高程 (m)")
+                else:
+                    pw.getAxis("left").setStyle(showValues=False)
+                if r == 2:
+                    pw.setLabel("bottom", "距离 (m)")
+                else:
+                    pw.getAxis("bottom").setStyle(showValues=False)
+                grid.addWidget(pw, r, c)
+                self._mini.append(pw)
+
+            # 中心：阻挡玫瑰图
+            self.rose_pw = pg.PlotWidget(background="w")
+            self.rose_pw.setAspectLocked(True)
+            self.rose_pw.hideAxis("left")
+            self.rose_pw.hideAxis("bottom")
+            grid.addWidget(self.rose_pw, 1, 1)
+            top.addLayout(left_col)
+            top.addWidget(grid_holder, 1)
+        else:
+            self.rose_pw = None
+            self._mini = []
+            top.addLayout(left_col)
+            top.addWidget(QLabel(
+                "⚠️ 本环境未安装 pyqtgraph，无法绘制图表（仍可在左侧表格查看结果）。"
+            ))
 
         # ---- 信号 ----
         self.btn_generate.clicked.connect(self._on_generate)
@@ -386,6 +410,13 @@ class RingProfileDialog(QDialog):
                     self.elec_sb.setValue(float(vals["elec_tilt"]))
                 except (ValueError, TypeError):  # nosec
                     pass
+            if vals.get("v_beamwidth") is not None:
+                try:
+                    vbw = float(vals["v_beamwidth"])
+                    if 1 <= vbw <= 90:
+                        self.vbw_sb.setValue(vbw)
+                except (ValueError, TypeError):  # nosec
+                    pass
             self.status_lbl.setText("已从选中要素获取经纬度与 RF 参数。")
         except Exception as e:  # nosec
             self.status_lbl.setText(f"从选中要素获取失败: {e}")
@@ -435,6 +466,7 @@ class RingProfileDialog(QDialog):
 
         height = self.height_sb.value()
         total_tilt = self.mech_sb.value() + self.elec_sb.value()
+        self._last_vbw = self.vbw_sb.value()   # 上/下波束虚线用（生成时定格）
         max_d = self.maxdist_sb.value()
         step = max(1, self.step_sb.value())
         azimuths = [i * 45 for i in range(8)]
@@ -581,11 +613,27 @@ class RingProfileDialog(QDialog):
         h = self.height_sb.value()
 
         # 与 vendor TerrainProfileWidget 同款图层顺序：
-        # 棕色地形底线(w2) → 分段着色描线(w3) → 主波束绿实线(w3) → 塔桅 → 标记
+        # 棕色地形底线(w2) → 分段着色描线(w3) → 主波束绿实线(w2) →
+        # 上/下波束蓝/红虚线(总下倾±垂直波束宽度/2) → 塔桅 → 标记
         pw.plot(dists, elevs, pen=pg.mkPen("brown", width=2))
         for xs, ys, col in self._terrain_segments(dists, elevs, beam):
             pw.plot(xs, ys, pen=pg.mkPen(col, width=3))
-        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=3))
+        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=2))
+
+        # 上/下波束边缘（Tab1 图例同款：上=蓝虚线，下=红虚线）
+        tilt = res.get("tilt",
+                       self.mech_sb.value() + self.elec_sb.value())
+        vbw = getattr(self, "_last_vbw", self.vbw_sb.value())
+        h = self.height_sb.value()
+        ang_u = max(min(tilt - vbw / 2.0, 89.5), -89.5)
+        ang_l = max(min(tilt + vbw / 2.0, 89.5), -89.5)
+        upper = [sg + h - d * math.tan(math.radians(ang_u)) for d in dists]
+        lower = [sg + h - d * math.tan(math.radians(ang_l)) for d in dists]
+        pw.plot(dists, upper,
+                pen=pg.mkPen("#185FA5", width=1.5, style=Qt.DashLine))
+        pw.plot(dists, lower,
+                pen=pg.mkPen("#A32D2D", width=1.5, style=Qt.DashLine))
+
         # 塔桅 + 天线挂高点（黑竖线 + 黑点）
         pw.plot([0, 0], [sg, sg + h], pen=pg.mkPen("k", width=2))
         pw.addItem(pg.ScatterPlotItem(
