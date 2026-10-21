@@ -2,6 +2,15 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.3.7] - 2026-10-21
+
+### 修复（基础功能回归：5G 厂家 GPKG 选中小区报错 "小区号解析失败: '6'"）
+- **根因**：字段候选 `CELL_ID_CANDIDATES` 含 `CellID`/`CELLID`/`cellid`，而 `天津5G厂家1016.gpkg` 把小区号**拆成 `gNodeBID` + `CellID` 两个字段**存储，`CellID` 仅是本地小区号（值=`6`）。原逻辑优先精确匹配到它 → `parse_cell_id('6')` 单段即报错。
+- **新增 `_detect_unique_id`**：检测优先级 ① 组合字段(Cnum/UniqueID 等且形如 gNB-Cell) ② **`gNodeBID`+`CellID` 分字段自动拼成 `gNB_Cell`**（正好覆盖该 GPKG）③ 单个 CellID 本地值（最坏仍返回，由调用方回退）④ 字段名含 unique/cell/uid 的短值。其它标准图层（有组合字段）行为不变。
+- **解析失败不再弹错**：`parse_cell_id` 抛 `ValueError`（如本地小区号 `6`）时静默回退 `run_from_selection`（要素直取经纬度+RF 出图），不再提示"失败"。
+- **工参查不到也不报错**：`query_gongcan_layer` 未命中时同样静默回退要素直取，确保「选中小区 → 出图」基础功能对所有图层（含该 GPKG）始终可用。
+- 用户强调：必须保证基础功能可用的前提下再加新功能；本次未动任何新增功能，仅加固主流程健壮性。
+
 ## [0.3.6] - 2026-10-21
 
 ### 修复（按用户反馈：弹窗超屏/跳变、剖面样式与 Tab1 不一致）

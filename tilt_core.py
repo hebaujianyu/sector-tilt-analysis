@@ -54,6 +54,88 @@ CELL_ID_CANDIDATES = [
     "CELL_ID", "CELLID",
 ]
 
+# 分字段存储候选（5G 厂家 GPKG 常见：gNodeBID / CellID 拆开存）
+GNBC_ID_FIELDS = [
+    "gNodeBID", "gNodeB_ID", "gnodebid", "gNBId", "gNBID", "gnbid",
+    "eNodeBID", "enodebid", "ENODEBID", "site_id", "基站ID", "站号",
+]
+CELL_LOCAL_FIELDS = [
+    "CellID", "cellid", "cell_id", "CELL_ID", "CELLID", "CI",
+    "sector_id", "小区ID", "SectorID",
+]
+
+
+def _detect_unique_id(feature, layer):
+    """从要素中稳健提取小区号（gNodeBID-CellID）。
+
+    返回 (unique_id_str, via_combined)：
+      - 命中「组合字段」(Cnum/UniqueID 等且形如 gNB-Cell) → 直接采用
+      - 命中「分字段存储」(gNodeBID + CellID) → 拼成 'gNB_Cell'，via_combined=True
+      - 仅命中单个 CellID 本地值（如 '6'） → 仍返回，via_combined=False
+        （调用方解析失败时会回退为要素直取模式，不再报错）
+
+    覆盖：① 标准 gNB-Cell 组合字段图层（其它图层行为不变）；
+          ② 天津5G厂家 GPKG 这类 gNodeBID/CellID 分字段存储的图层。
+    """
+    fields = list(layer.fields())
+    fnames = [f.name() for f in fields]
+
+    def _val(name):
+        try:
+            v = feature[name]
+        except Exception:  # nosec
+            return None
+        return v if v not in (None, "", QVariant()) else None
+
+    # 1) 组合字段且形如 gNB-Cell → 直接采用
+    for cand in ["Cnum", "UniqueID", "unique_id", "uniqueid", "UNIQUEID",
+                 "唯一标识", "小区标识", "小区ID", "cell_id", "cellid",
+                 "CELL_ID", "CELLID", "CellID"]:
+        if cand in fnames:
+            v = _val(cand)
+            if v is not None and re.match(r"^\d+[-_]\d+$", str(v).strip()):
+                return str(v).strip(), False
+
+    # 2) 分字段存储（gNodeBID + CellID）→ 拼成 'gNB_Cell'
+    gnb_field = cell_field = None
+    for f in fields:
+        fl = f.name().lower()
+        if gnb_field is None and fl in [c.lower() for c in GNBC_ID_FIELDS]:
+            gnb_field = f.name()
+        if cell_field is None and fl in [c.lower() for c in CELL_LOCAL_FIELDS]:
+            cell_field = f.name()
+    if gnb_field and cell_field:
+        g = _val(gnb_field)
+        c = _val(cell_field)
+        if g is not None and c is not None:
+            try:
+                return (f"{int(float(str(g)))}_".rstrip("_")
+                        + f"{int(float(str(c)))}"), True
+            except (ValueError, TypeError):
+                return f"{str(g).strip()}_{str(c).strip()}", True
+
+    # 3) 单个 CellID 本地值（最坏情况仍返回，由调用方回退）
+    for cand in ["CellID", "CELLID", "cellid", "cell_id", "CELL_ID", "CI",
+                 "sector_id", "小区ID"]:
+        if cand in fnames:
+            v = _val(cand)
+            if v is not None:
+                return str(v).strip(), False
+
+    # 4) 字段名含 unique/uid/cell（短值、非展示长字段）
+    for f in fields:
+        fn = f.name().lower()
+        if "unique" in fn or "uid" in fn or "cell" in fn:
+            v = _val(f.name())
+            if v is None:
+                continue
+            sv = str(v).strip()
+            if len(sv) > 20 or "：" in sv or ":" in sv:
+                continue
+            return sv, False
+
+    return None, False
+
 
 # ============================================================================
 # 1. 解析小区号(UniqueID/gNodeBID-CellID)
@@ -546,106 +628,20 @@ def run_from_feature(feature, layer, auto_run=True):
     auto_run=True：填充完成后程序化触发 扇区Tilt分析 的 Run Analysis，
                   实现「一键传参并出结果」。
     """
-    # 5.1 获取小区号（自动检测字段名）
-    field_names = [f.name() for f in layer.fields()]
-    unique_id = None
-
-    # 精确匹配候选字段名
-    for candidate in CELL_ID_CANDIDATES:
-        if candidate in field_names:
-            v = feature[candidate]
-            if v not in (None, "", QVariant()):
-                unique_id = v
-                break
-
-    # 兜底: 基站ID_小区ID 拼接 (gNodeBID + CellID)
-    if unique_id is None:
-        gnb_candidates = ['gNodeBID', 'gnodebid', 'gNodeB_ID', 'gNodeB', 'eNodeBID', 'site_id', '基站ID', '站号']
-        cell_candidates = ['CellID', 'cellid', 'cell_id', 'Cell_ID', 'sector_id', 'CI', '小区ID', 'Cnum']
-        gnb_field = cell_field = None
-        for f in layer.fields():
-            fn = f.name().lower()
-            for c in gnb_candidates:
-                if c.lower() == fn:
-                    gnb_field = f.name()
-                    break
-            for c in cell_candidates:
-                if c.lower() == fn:
-                    cell_field = f.name()
-                    break
-        if gnb_field and cell_field:
-            gnb_v = feature[gnb_field]
-            cell_v = feature[cell_field]
-            if gnb_v not in (None, "", QVariant()) and cell_v not in (None, "", QVariant()):
-                try:
-                    # Cnum 常为两段式 gNB-Cell（如 3286202-202），直接用即可
-                    cv_str = str(cell_v).strip()
-                    if re.match(r"^\d+[-_]\d+$", cv_str):
-                        unique_id = cv_str
-                    else:
-                        unique_id = f"{int(float(str(gnb_v)))}_{int(float(cv_str))}"
-                except (ValueError, TypeError):
-                    unique_id = f"{str(gnb_v).strip()}_{str(cell_v).strip()}"
-
-    # 兜底：字段名含 unique / cell / uid
-    if unique_id is None:
-        for f in layer.fields():
-            fname = f.name().lower()
-            if 'unique' in fname or 'cell' in fname or 'uid' in fname:
-                v = feature[f.name()]
-                if v not in (None, "", QVariant()):
-                    unique_id = v
-                    break
-
-    # 最后兜底：第一个非空字符串字段（排除"小区"这类三段式展示字段，
-    # 优先 Cnum / UniqueID 两段式 gNB-Cell 格式字段）
-    if unique_id is None:
-        for f in layer.fields():
-            fname = f.name()
-            if f.type() not in (10, QVariant.String):
-                continue
-            v = feature[f.name()]
-            if v in (None, "", QVariant()):
-                continue
-            # 优先取两段式/短值字段（gNB-Cell），避免取到"站址号:gNB-小区_站名"长展示字段
-            sv = str(v).strip()
-            if fname in ("Cnum", "UniqueID", "unique_id", "uniqueid", "唯一标识"):
-                unique_id = sv
-                break
-            # 含全角冒号/下划线+站名 → 三段式展示字段，跳过（改用组合还原）
-            if "：" in sv or ":" in sv or len(sv) > 20:
-                continue
-            unique_id = sv
-            break
-
-    # 若最终取到的是三段式展示值（站址号-gNB-Cell_站名），尝试用 基站ID+Cnum 还原 gNB-Cell
-    if unique_id is not None and ("：" in str(unique_id) or ":" in str(unique_id)):
-        try:
-            gnb_f = cell_f = None
-            for f in layer.fields():
-                fn = f.name().lower()
-                if gnb_f is None and fn in ("基站id", "gnodebid", "gnodeb", "站号"):
-                    gnb_f = f.name()
-                if cell_f is None and fn in ("cnum", "uniqueid", "unique_id", "小区id", "cellid", "小区标识"):
-                    cell_f = f.name()
-            if gnb_f and cell_f:
-                g = feature[gnb_f]
-                c = feature[cell_f]
-                if g not in (None, "", QVariant()) and c not in (None, "", QVariant()):
-                    unique_id = f"{int(float(str(g)))}_{int(float(str(c)))}"
-        except (ValueError, TypeError):
-            pass
+    # 5.1 获取小区号（自动检测字段名：优先组合字段，其次 gNodeBID+CellID 分字段）
+    unique_id, via_combined = _detect_unique_id(feature, layer)
 
     if unique_id is None:
         QMessageBox.warning(None, "扇区Tilt分析", "未在要素中找到小区号(UniqueID)字段！")
         return
 
-    # 5.2 解析小区号；解析失败(如字段值是 '2' 这类非 gNB-Cell 格式)时，
+    # 5.2 解析小区号；解析失败(如字段值是本地小区号 '6' 这类非 gNB-Cell 格式)时，
     #     不再致命报错，回退为「要素直取」模式（直接用当前要素的经纬度+RF 参数）
     try:
         parsed = parse_cell_id(unique_id)
-    except ValueError as e:
-        print(f"[扇区Tilt分析] {e} → 回退为要素直取模式(run_from_selection)")
+    except ValueError:
+        print(f"[扇区Tilt分析] 小区号 '{unique_id}' 非 gNodeBID-CellID 格式，"
+              f"回退为要素直取模式(run_from_selection)")
         run_from_selection(feature, layer, auto_run=True)
         return
 
@@ -677,12 +673,11 @@ def run_from_feature(feature, layer, auto_run=True):
         site_dict = {f.name(): feature[f.name()] for f in layer.fields()}
 
     if site_dict is None:
-        QMessageBox.warning(
-            None, "扇区Tilt分析",
-            f"工参图层 [{gongcan_layer.name()}] 中未找到:\n"
-            f"  cellname = '{parsed['cell_uid']}'\n"
-            f"  或 LIKE '{parsed['like_pattern']}'"
-        )
+        # 工参未匹配（点击的图层非工参层，或小区号在工参表中查不到）：
+        # 不弹错误，直接按当前要素字段直取分析，保证「选中小区 → 出图」基础功能可用。
+        print(f"[扇区Tilt分析] 工参层未匹配到 cell_uid={parsed['cell_uid']}，"
+              f"回退为要素直取模式(run_from_selection)")
+        run_from_selection(feature, layer, auto_run=True)
         return
 
     # 5.5 提取 RF 参数
