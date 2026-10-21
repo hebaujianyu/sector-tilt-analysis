@@ -2,6 +2,11 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.4] - 2026-10-21
+
+### 修复（点选/选中分析崩溃）
+- **`QgsMapLayer` 没有 `isVisible()` 方法**（可见性属于图层树节点）：PickTool 遍历图层时调用 `layer.isVisible()` → AttributeError → 点选/选中分析崩溃。改为 `layerTreeRoot().findLayer(layer).itemVisibilityChecked()`（节点不存在时不过滤），并全量排查插件其余部分——其余 `isVisible()/isChecked()` 均为 Qt 控件自身方法，合法。
+
 ## [0.4.3] - 2026-10-21
 
 ### 修复（打开工具箱即 NameError + 潜伏的间歇性采样失败）

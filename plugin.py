@@ -75,7 +75,7 @@ class PickTool(QgsMapTool):
         for layer in canvas.layers():
             if not isinstance(layer, QgsVectorLayer):
                 continue
-            if not layer.isVisible():
+            if not self._layer_visible(layer):
                 continue
             try:
                 xform = QgsCoordinateTransform(crs_map, layer.crs(), project)
@@ -101,6 +101,23 @@ class PickTool(QgsMapTool):
                 continue
 
         return best_layer, best_feat
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _layer_visible(layer):
+        """图层可见性要查图层树节点（QgsMapLayer 没有 isVisible 方法）。
+
+        0.4.0 误用 layer.isVisible() → AttributeError → 点选必崩。
+        正确做法：layerTreeRoot().findLayer(layer).itemVisibilityChecked()。
+        节点不存在（如临时生成的锚点图层未入树）时不过滤。
+        """
+        try:
+            node = QgsProject.instance().layerTreeRoot().findLayer(layer)
+            if node is None:
+                return True
+            return bool(node.itemVisibilityChecked())
+        except Exception:  # nosec
+            return True
 
 
 class SectorTiltMAuto:
