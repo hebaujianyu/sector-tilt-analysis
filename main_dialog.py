@@ -82,6 +82,22 @@ class MainToolDialog(QDialog):
         self.tilt_dialog.setWindowFlags(Qt.Widget)
         self.tab_widget.addTab(self.tilt_dialog, "扇区Tilt分析")
 
+        # 关键：构造时就把 RF 引擎 controller 挂上（有 DEM 用真 DEM，无 DEM 用
+        # 1×1 微型锚点）。否则 controller 为 None 时，直接点对话框自带的
+        # 「Run Analysis」会弹英文框 "The RF analysis engine failed to initialize"。
+        self._attach_controller()
+
+    # ------------------------------------------------------------------
+    def _attach_controller(self):
+        """把垂直分析引擎 controller 绑定到 tilt_dialog（失败只记日志）。"""
+        try:
+            from .tilt_core import _ensure_controller
+            _ensure_controller(self.tilt_dialog)
+            ok = getattr(self.tilt_dialog, "controller", None) is not None
+            LOG.info(f"[main_dialog] 引擎 controller 绑定: {'OK' if ok else 'FAILED'}")
+        except Exception as e:  # nosec
+            LOG.warning(f"[main_dialog] 引擎 controller 绑定失败: {e}")
+
         # ---- Tab 2 : 环向剖面分析 (45° × 8) ----
         from .ring_profile_dialog import RingProfileDialog
         self.ring_dialog = RingProfileDialog(parent=self)

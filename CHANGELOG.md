@@ -2,6 +2,14 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.5] - 2026-10-21
+
+### 修复（英文报错 "The RF analysis engine failed to initialize"）
+- **定位**：该提示来自 vendor `vertical_analysis_dialog.run_analysis()`，触发条件就是 **`self.controller is None`**（引擎 controller 没挂上）。此前只有走“点选/选中”流程才会去挂 controller，直接点 Tab1 自带的「Run Analysis」按钮时 controller 仍为空 → 弹英文框。
+- **工具箱创建时即绑定引擎**：`MainToolDialog.__init__` 新增 `_attach_controller()`，构造 Tab1 时就调用 `_ensure_controller`（有真 DEM 用真 DEM，没有则用 1×1 微型锚点），失败只记日志、不打断界面。
+- **跑分析前兜底**：`tilt_core._apply_and_run` 在 `run_analysis()` 前检查 controller，为空则再尝试绑定一次，仍失败给**中文**提示并中止——彻底不再出现英文 Application Error 框。
+- `_create_dem_anchor` 增加残缺文件重建（已存在但 <500B 视为损坏，先删后建），避免临时 tif 损坏导致锚点无效。
+
 ## [0.4.4] - 2026-10-21
 
 ### 修复（点选/选中分析崩溃）

@@ -491,6 +491,13 @@ def _create_dem_anchor():
 
     import tempfile
     path = os.path.join(tempfile.gettempdir(), "sector_tiltm_dem_anchor.tif")
+    # 已存在但疑似残缺（<500B，正常 1×1 GeoTIFF 远大于此）→ 重建
+    if os.path.exists(path):
+        try:
+            if os.path.getsize(path) < 500:
+                os.remove(path)
+        except Exception:  # nosec
+            pass
     if not os.path.exists(path):
         try:
             from osgeo import gdal, osr
@@ -795,6 +802,25 @@ def _apply_and_run(values, cell_name, unique_id=None):
             _main.setWindowTitle(f"扇区Tilt分析工具箱｜{_label}")
     except Exception:  # nosec
         pass
+
+    # 兜底：确保引擎 controller 已绑定。若为空，vendor 的 run_analysis 会弹英文框
+    # "The RF analysis engine failed to initialize"，这里改为中文提示并中止。
+    if getattr(dialog, "controller", None) is None:
+        try:
+            _ensure_controller(dialog)
+        except Exception as e:  # nosec
+            QMessageBox.critical(
+                None, "扇区Tilt分析",
+                f"分析引擎初始化失败，无法出图：\n{e}"
+            )
+            return
+    if getattr(dialog, "controller", None) is None:
+        QMessageBox.critical(
+            None, "扇区Tilt分析",
+            "分析引擎未能初始化（controller 为空）。\n"
+            "请在 QGIS 加载一个 DEM 栅格图层后重试。"
+        )
+        return
 
     # 填充控件
     filled = fill_dialog(dialog, values)
