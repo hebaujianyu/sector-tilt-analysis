@@ -54,28 +54,37 @@ CELL_ID_CANDIDATES = [
     "CELL_ID", "CELLID",
 ]
 
-# 分字段存储候选（5G 厂家 GPKG 常见：gNodeBID / CellID 拆开存）
+# 小区标识候选（按用户域知识优先级：CGI > 基站号/站号 + 小区号/小区id > 小区号/小区id）
+# CGI（NR-CGI / ECGI）最权威：含 gNB/eNB ID + Cell ID，可能带 PLMN 前缀（如 46000-3286202-6）
+CGI_FIELDS = [
+    "CGI", "NR-CGI", "NRCGI", "ECGI", "cgi", "cgI", "Cgi",
+    "全局小区标识", "小区全局标识", "NR_CGI", "NR CGI",
+]
+# 基站号 / 站号（gNodeBID / eNodeBID）
 GNBC_ID_FIELDS = [
     "gNodeBID", "gNodeB_ID", "gnodebid", "gNBId", "gNBID", "gnbid",
-    "eNodeBID", "enodebid", "ENODEBID", "site_id", "基站ID", "站号",
+    "eNodeBID", "enodebid", "ENODEBID", "eNBID",
+    "基站ID", "基站号", "站号", "site_id",
 ]
+# 小区号 / 小区id（本地小区号）
 CELL_LOCAL_FIELDS = [
     "CellID", "cellid", "cell_id", "CELL_ID", "CELLID", "CI",
-    "sector_id", "小区ID", "SectorID",
+    "sector_id", "小区ID", "小区号", "SectorID", "CellID字段",
 ]
 
 
 def _detect_unique_id(feature, layer):
     """从要素中稳健提取小区号（gNodeBID-CellID）。
 
-    返回 (unique_id_str, via_combined)：
-      - 命中「组合字段」(Cnum/UniqueID 等且形如 gNB-Cell) → 直接采用
-      - 命中「分字段存储」(gNodeBID + CellID) → 拼成 'gNB_Cell'，via_combined=True
-      - 仅命中单个 CellID 本地值（如 '6'） → 仍返回，via_combined=False
-        （调用方解析失败时会回退为要素直取模式，不再报错）
+    按用户域知识优先级（CGI > 基站号/站号+小区号/小区id > 小区号/小区id）：
+      1) CGI（NR-CGI/ECGI，最权威，含 gNB/eNB ID + Cell ID，可带 PLMN 前缀）
+      2) 组合字段（Cnum/UniqueID 等，形如 gNB-Cell，兼容标准图层）
+      3) 分字段存储（gNodeBID/基站号/站号 + CellID/小区号/小区id）→ 拼 'gNB_Cell'
+      4) 单个 CellID 本地值（如 '6'，最坏仍返回，由调用方回退）
 
-    覆盖：① 标准 gNB-Cell 组合字段图层（其它图层行为不变）；
-          ② 天津5G厂家 GPKG 这类 gNodeBID/CellID 分字段存储的图层。
+    返回 (unique_id_str, via_combined)：via_combined=True 表示由分字段拼成。
+    解析失败 / 工参查不到 时调用方会静默回退「要素直取」，不再弹错误，
+    保证基础功能（选中小区 → 出图）对所有图层可用。
     """
     fields = list(layer.fields())
     fnames = [f.name() for f in fields]
@@ -87,7 +96,14 @@ def _detect_unique_id(feature, layer):
             return None
         return v if v not in (None, "", QVariant()) else None
 
-    # 1) 组合字段且形如 gNB-Cell → 直接采用
+    # 1) CGI（最权威：NR-CGI / ECGI，含 gNB/eNB ID + Cell ID，可带 PLMN 前缀）
+    for cand in CGI_FIELDS:
+        if cand in fnames:
+            v = _val(cand)
+            if v is not None and re.search(r"\d+[-_]\d+", str(v).strip()):
+                return str(v).strip(), True
+
+    # 2) 组合字段且形如 gNB-Cell（Cnum/UniqueID 等，兼容既有标准图层）
     for cand in ["Cnum", "UniqueID", "unique_id", "uniqueid", "UNIQUEID",
                  "唯一标识", "小区标识", "小区ID", "cell_id", "cellid",
                  "CELL_ID", "CELLID", "CellID"]:
@@ -357,6 +373,8 @@ def query_gongcan_layer(layer, field_map, cell_uid, like_pattern):
         "Cnum", "UniqueID", "unique_id", "uniqueid", "UNIQUEID",
         "唯一标识", "小区标识", "小区ID", "cell_id", "cellid",
         "CELL_ID", "CELLID", "CellID",
+        # CGI（NR-CGI/ECGI）字段，便于工参表以 CGI 存储时也能精确匹配
+        "CGI", "NR-CGI", "NRCGI", "ECGI", "CGI字段", "全局小区标识",
     ]
     composite_field = None
     for cand in composite_candidates:

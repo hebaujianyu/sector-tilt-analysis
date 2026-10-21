@@ -2,6 +2,18 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.3.8] - 2026-10-21
+
+### 修复/优化（小区号检测优先级，按用户域知识）
+- `tilt_core._detect_unique_id` 检测优先级改为 **CGI > 基站号/站号 + 小区号/小区id > 小区号/小区id**：
+  1) **CGI**（NR-CGI/ECGI，最权威，含 gNB/eNB ID + Cell ID，可带 PLMN 前缀，如 `46000-3286202-6`）优先；
+  2) 组合字段（Cnum/UniqueID 等形如 gNB-Cell，兼容标准图层）；
+  3) **gNodeBID/基站号/站号 + CellID/小区号/小区id 分字段**自动拼 `gNB_Cell`（覆盖天津5G厂家 GPKG）；
+  4) 单个 CellID 本地值（最坏回退）。
+- 新增 `CGI_FIELDS`，扩充 `GNBC_ID_FIELDS`（加 基站号/eNBID）、`CELL_LOCAL_FIELDS`（加 小区号/CellID字段）。
+- `query_gongcan_layer` 的复合字段候选补入 CGI 系列，工参表以 CGI 存储时也能精确匹配。
+- 行为不变：解析失败/工参查不到仍静默回退要素直取，基础功能不受影响。
+
 ## [0.3.7] - 2026-10-21
 
 ### 修复（基础功能回归：5G 厂家 GPKG 选中小区报错 "小区号解析失败: '6'"）
