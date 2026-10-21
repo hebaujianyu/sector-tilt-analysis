@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QGridLayout, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QHeaderView,
-    QWidget, QScrollArea, QApplication
+    QWidget, QScrollArea, QApplication, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -280,6 +280,12 @@ class RingProfileDialog(QDialog):
             grid_holder = QWidget()
             grid = QGridLayout(grid_holder)
             grid.setSpacing(4)
+            # 等分行列：所有格子随窗口自适应、等大（配合 Ignored 尺寸策略，
+            # 消除标题文字长度导致的列宽不一与缩放变形）
+            for c in range(3):
+                grid.setColumnStretch(c, 1)
+            for r in range(3):
+                grid.setRowStretch(r, 1)
             # 罗盘方位排布：索引 = azimuth // 45
             #   (0,0)NW (0,1)N (0,2)NE
             #   (1,0)W  (1,1)玫瑰 (1,2)E
@@ -289,7 +295,11 @@ class RingProfileDialog(QDialog):
             self._mini = []
             for i in range(8):
                 pw = pg.PlotWidget(background="w")
-                pw.setMinimumHeight(170)
+                # Ignored：无视控件 sizeHint（标题文字会把 hint 撑大，
+                # 造成各列宽度不一、缩放变形），完全跟随网格等分空间
+                pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+                pw.setMinimumHeight(120)
+                pw.setMinimumWidth(120)
                 pw.showGrid(x=True, y=True, alpha=0.25)
                 # 性能优化（与 vendor TerrainProfileWidget 一致）
                 pw.setClipToView(True)
@@ -307,8 +317,11 @@ class RingProfileDialog(QDialog):
                 grid.addWidget(pw, r, c)
                 self._mini.append(pw)
 
-            # 中心：阻挡玫瑰图
+            # 中心：阻挡玫瑰图（同样 Ignored，保证九宫格等大）
             self.rose_pw = pg.PlotWidget(background="w")
+            self.rose_pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            self.rose_pw.setMinimumHeight(120)
+            self.rose_pw.setMinimumWidth(120)
             self.rose_pw.setAspectLocked(True)
             self.rose_pw.hideAxis("left")
             self.rose_pw.hideAxis("bottom")
@@ -637,14 +650,14 @@ class RingProfileDialog(QDialog):
             ti.setPos(dists[idx], elevs[idx])
             pw.addItem(ti)
 
-        title = (f"{label} — 全程畅通" if clear
-                 else f"{label} — {fo:.0f} m 处遮挡")
+        title = (f"{label} · 畅通" if clear
+                 else f"{label} · {fo:.0f}m 遮挡")
         pw.setTitle(title)
         pw.setXRange(0, user_max)
 
     def _draw_mini_empty(self, pw, az, reason, user_max):
         label = AZ_TO_LABEL.get(az, f"{az}°")
-        pw.setTitle(f"{label} — 采样失败")
+        pw.setTitle(f"{label} · 采样失败")
         t = pg.TextItem(f"✗ {reason}", color="#d62728", anchor=(0.5, 0.5))
         t.setPos(user_max / 2.0, 0.5)
         pw.addItem(t)
