@@ -2,6 +2,16 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.9] - 2026-10-22
+### Added
+- **环向剖面新增「在地图上点选取点」**（替代「从地图中心获取」）：在地图上点击目标位置——点位上有基站/扇区要素则自动带入经纬度+挂高+机械下倾+电子下倾+垂直波束宽度；点位是空地则只落经纬度、RF 参数手动填。点完自动恢复原地图工具。
+- 取参结果明确回报：状态栏显示"经纬度取自 字段/点击点/几何质心"与"已带入 xxx ｜未识别(yyy)，请手动填写"，不再静默失败。
+
+### Changed
+- 提取公共几何查找 `tilt_core.find_feature_at_point()` / `layer_tree_visible()`，点选工具与环向剖面共用（去掉 plugin.PickTool 内的重复实现）。
+- 环向剖面 RF 填充统一走 `_apply_rf_vals()`，「从选中要素获取」与点选取点共用同一逻辑。
+- 扩充字段别名：`center_longitude/center_latitude`（MapInfo TAB 习惯）、`天线高度/AntennaHeight`、`垂直半功率角/VerticalBeamwidth`、`MechanicalDowntilt/ElectricalDowntilt` 等。
+
 ## [0.4.8] - 2026-10-22
 ### Fixed
 - **Open-Meteo 不可达不再弹模态框打断分析**：在线探测失败时自动降级到项目里的本地 DEM 继续出图（messageBar 提示），仅当项目无任何可用 DEM 栅格时才弹窗。

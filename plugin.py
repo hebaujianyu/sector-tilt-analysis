@@ -26,13 +26,10 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 # 注意：QgsMapTool 属于 qgis.gui，绝不能从 qgis.core 导入
 # （0.4.0 误从 qgis.core 导入导致模块加载失败、classFactory 报错）
-from qgis.core import (
-    QgsVectorLayer, QgsFeatureRequest, QgsRectangle,
-    QgsGeometry, QgsCoordinateTransform, QgsProject
-)
+from qgis.core import QgsVectorLayer
 from qgis.gui import QgsMapTool
 
-from .tilt_core import run_from_feature, run_from_selection
+from .tilt_core import run_from_feature, run_from_selection, find_feature_at_point
 
 
 class PickTool(QgsMapTool):
@@ -56,68 +53,10 @@ class PickTool(QgsMapTool):
     def canvasReleaseEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        layer, feat = self._find_feature(event.mapPoint())
-        self.canvasClicked.emit(layer, feat, event.button())
-
-    # ------------------------------------------------------------------
-    def _find_feature(self, map_point):
-        canvas = self.canvas()
-        mupp = canvas.mapUnitsPerPixel()
-        tol = max(mupp * self.TOLERANCE_PX, 1e-9)
-        rect = QgsRectangle(
-            map_point.x() - tol, map_point.y() - tol,
-            map_point.x() + tol, map_point.y() + tol
+        layer, feat = find_feature_at_point(
+            self.canvas(), event.mapPoint(), self.TOLERANCE_PX
         )
-        crs_map = canvas.mapSettings().destinationCrs()
-        project = QgsProject.instance()
-
-        best_layer, best_feat, best_dist = None, None, None
-        for layer in canvas.layers():
-            if not isinstance(layer, QgsVectorLayer):
-                continue
-            if not self._layer_visible(layer):
-                continue
-            try:
-                xform = QgsCoordinateTransform(crs_map, layer.crs(), project)
-                lyr_rect = xform.transformBoundingBox(rect)
-                pt_lyr = xform.transform(map_point)
-            except Exception:  # nosec — CRS 转换失败按同 CRS 处理
-                lyr_rect, pt_lyr = rect, map_point
-
-            click_geom = QgsGeometry.fromPointXY(pt_lyr)
-            req = QgsFeatureRequest().setFilterRect(lyr_rect)
-            try:
-                for feat in layer.getFeatures(req):
-                    geom = feat.geometry()
-                    if geom is None or geom.isEmpty():
-                        continue
-                    try:
-                        d = geom.distance(click_geom)
-                    except Exception:  # nosec
-                        d = 0.0
-                    if best_dist is None or d < best_dist:
-                        best_layer, best_feat, best_dist = layer, feat, d
-            except Exception:  # nosec — 空间索引/过滤异常跳过该图层
-                continue
-
-        return best_layer, best_feat
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _layer_visible(layer):
-        """图层可见性要查图层树节点（QgsMapLayer 没有 isVisible 方法）。
-
-        0.4.0 误用 layer.isVisible() → AttributeError → 点选必崩。
-        正确做法：layerTreeRoot().findLayer(layer).itemVisibilityChecked()。
-        节点不存在（如临时生成的锚点图层未入树）时不过滤。
-        """
-        try:
-            node = QgsProject.instance().layerTreeRoot().findLayer(layer)
-            if node is None:
-                return True
-            return bool(node.itemVisibilityChecked())
-        except Exception:  # nosec
-            return True
+        self.canvasClicked.emit(layer, feat, event.button())
 
 
 class SectorTiltMAuto:

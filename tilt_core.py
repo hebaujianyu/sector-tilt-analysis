@@ -34,16 +34,21 @@ CONFIG = {
 # 字段名候选（中英文自动匹配，按优先级排列）
 # ============================================================================
 FIELD_CANDIDATES = {
-    "longitude":   ["longitude", "lon", "lng", "经度", "Longitude", "经  度"],
-    "latitude":    ["latitude", "lat", "纬度", "Latitude"],
+    "longitude":   ["longitude", "lon", "lng", "经度", "Longitude", "经  度",
+                    "center_longitude", "中心经度", "基站经度", "天线经度"],
+    "latitude":    ["latitude", "lat", "纬度", "Latitude",
+                    "center_latitude", "中心纬度", "基站纬度", "天线纬度"],
     "azimuth":     ["azimuth", "方位角", "Azimuth", "方向角", "Az"],
     "mech_tilt":   ["mech_tilt", "mechanical_tilt", "机械下倾", "机械倾角",
-                   "MTilt", "downtilt", "下倾角", "机械下倾角"],
+                    "MTilt", "downtilt", "下倾角", "机械下倾角",
+                    "MechanicalDowntilt", "mechDowntilt"],
     "elec_tilt":   ["elec_tilt", "electrical_tilt", "电子下倾", "电子倾角",
-                   "ETilt", "电下倾", "RetTilt"],
+                    "ETilt", "电下倾", "RetTilt", "ElectricalDowntilt"],
     "height":      ["height", "天线挂高", "antenna_height", "挂高",
-                   "TowerHeight", "站高", "AntHeight"],
-    "v_beamwidth": ["vertical_beamwidth", "v_beamwidth", "垂直波束宽度", "VBW"],
+                    "TowerHeight", "站高", "AntHeight", "天线高度",
+                    "AntennaHeight", "Height"],
+    "v_beamwidth": ["vertical_beamwidth", "v_beamwidth", "垂直波束宽度", "VBW",
+                    "垂直半功率角", "VerticalBeamwidth", "垂直波瓣宽度"],
     "h_beamwidth": ["horizontal_beamwidth", "h_beamwidth", "水平波束宽度", "HBW"],
     "cell_name":   ["cellname", "cell_name", "CellName", "小区名"],
 }
@@ -227,6 +232,77 @@ def _match_field(fields, candidates):
             if cl in f.name().lower():
                 return f.name()
     return None
+
+
+# ============================================================================
+# 2b. 公共：画布点 → 矢量要素（点选工具与环向剖面共用，避免重复实现）
+# ============================================================================
+
+def layer_tree_visible(layer):
+    """图层是否可见 —— 可见性属于图层树节点。
+
+    注意：QgsMapLayer 在 QGIS 3.x 里没有 isVisible() 方法（0.4.0 曾误用导致
+    点选必崩 AttributeError）。正确做法是查图层树节点。
+    """
+    try:
+        node = QgsProject.instance().layerTreeRoot().findLayer(layer)
+        if node is None:
+            return True
+        return bool(node.itemVisibilityChecked())
+    except Exception:  # nosec
+        return True
+
+
+def find_feature_at_point(canvas, map_point, tolerance_px=10):
+    """查找画布点附近「距离最近的矢量要素」。
+
+    手写几何查找：10 像素容差矩形 → 逐图层转 CRS → setFilterRect 粗筛 →
+    算几何距离取最小。不依赖 QgsMapToolIdentify（其 identifyMapEvent 在
+    QGIS 3.x Python API 中并不存在，旧版调用被 except 吞掉导致永远查不到）。
+
+    返回 (layer, feature)；未命中返回 (None, None)。
+    """
+    from qgis.core import (
+        QgsRectangle, QgsGeometry, QgsCoordinateTransform
+    )
+
+    mupp = canvas.mapUnitsPerPixel()
+    tol = max(mupp * tolerance_px, 1e-9)
+    rect = QgsRectangle(map_point.x() - tol, map_point.y() - tol,
+                        map_point.x() + tol, map_point.y() + tol)
+    crs_map = canvas.mapSettings().destinationCrs()
+    project = QgsProject.instance()
+
+    best_layer = best_feat = best_dist = None
+    for layer in canvas.layers():
+        if not isinstance(layer, QgsVectorLayer):
+            continue
+        if not layer_tree_visible(layer):
+            continue
+        try:
+            xform = QgsCoordinateTransform(crs_map, layer.crs(), project)
+            lyr_rect = xform.transformBoundingBox(rect)
+            pt_lyr = xform.transform(map_point)
+        except Exception:  # nosec — CRS 转换失败按同 CRS 处理
+            lyr_rect, pt_lyr = rect, map_point
+
+        click_geom = QgsGeometry.fromPointXY(pt_lyr)
+        req = QgsFeatureRequest().setFilterRect(lyr_rect)
+        try:
+            for feat in layer.getFeatures(req):
+                geom = feat.geometry()
+                if geom is None or geom.isEmpty():
+                    continue
+                try:
+                    d = geom.distance(click_geom)
+                except Exception:  # nosec
+                    d = 0.0
+                if best_dist is None or d < best_dist:
+                    best_layer, best_feat, best_dist = layer, feat, d
+        except Exception:  # nosec — 空间索引/过滤异常跳过该图层
+            continue
+
+    return best_layer, best_feat
 
 
 def _score_gongcan_layer(layer):

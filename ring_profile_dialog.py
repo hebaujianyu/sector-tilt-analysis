@@ -45,9 +45,14 @@ except ImportError:  # nosec
 from qgis.core import (
     QgsPointXY, QgsCoordinateTransform, QgsProject, QgsVectorLayer
 )
+# 注意：QgsMapTool 属于 qgis.gui，不可从 qgis.core 导入
+from qgis.gui import QgsMapTool
 from qgis.utils import iface
 
-from .tilt_core import _find_dem_layer, _match_field, FIELD_CANDIDATES, extract_site_values
+from .tilt_core import (
+    _find_dem_layer, _match_field, FIELD_CANDIDATES, extract_site_values,
+    find_feature_at_point,
+)
 
 # 8 个方向标签与固定配色（必须按方位角映射，禁止按结果下标取）
 DIRECTION_LABELS = ["N (0°)", "NE (45°)", "E (90°)", "SE (135°)",
@@ -158,6 +163,53 @@ class _RingWorker(QThread):
             self.error_occured.emit(str(e))
 
 
+class RingPickTool(QgsMapTool):
+    """一次性地图点选工具：取回经纬度，命中要素时连带返回该要素。
+
+    点完自动恢复上一个地图工具，避免把用户困在点选模式里导致无法平移/缩放。
+    """
+    picked = pyqtSignal(object, object, object, object)  # (lon, lat, layer, feature)
+
+    TOLERANCE_PX = 10
+
+    def __init__(self, canvas, prev_tool=None):
+        super().__init__(canvas)
+        self.setCursor(Qt.CrossCursor)
+        self._prev_tool = prev_tool
+
+    def canvasReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        canvas = self.canvas()
+        map_pt = event.mapPoint()
+        lon, lat = self._to_wgs84(map_pt, canvas)
+        layer, feat = find_feature_at_point(canvas, map_pt, self.TOLERANCE_PX)
+        self._restore(canvas)
+        self.picked.emit(lon, lat, layer, feat)
+
+    @staticmethod
+    def _to_wgs84(map_pt, canvas):
+        crs = canvas.mapSettings().destinationCrs()
+        if crs is not None and crs.authid() != "EPSG:4326":
+            xform = QgsCoordinateTransform(
+                crs, QgsProject.instance().crsFromAuthId("EPSG:4326"),
+                QgsProject.instance()
+            )
+            pt = xform.transform(map_pt)
+        else:
+            pt = map_pt
+        return pt.x(), pt.y()
+
+    def _restore(self, canvas):
+        try:
+            if self._prev_tool is not None:
+                canvas.setMapTool(self._prev_tool)
+            else:
+                canvas.unsetMapTool(self)
+        except Exception:  # nosec — 恢复失败不阻塞后续出图
+            pass
+
+
 class RingProfileDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -247,12 +299,18 @@ class RingProfileDialog(QDialog):
         form.addRow("地形源:", self.source_combo)
 
         btn_row = QHBoxLayout()
-        self.btn_center = QPushButton("从地图中心获取")
+        self.btn_pick = QPushButton("在地图上点选取点")
+        self.btn_pick.setToolTip(
+            "在地图上点击目标位置（推荐）：\n"
+            "· 点位上有基站/扇区要素 → 自动带入 经纬度 + 挂高 + 下倾 + 波束宽度\n"
+            "· 点位是空地/无要素 → 只取该点经纬度，RF 参数请手动填\n"
+            "点完自动恢复原来的地图工具。"
+        )
         self.btn_sel = QPushButton("从选中要素获取")
         self.btn_generate = QPushButton("生成环向剖面")
         self.btn_generate.setStyleSheet("font-weight:bold;")
         self.btn_close = QPushButton("关闭")
-        btn_row.addWidget(self.btn_center)
+        btn_row.addWidget(self.btn_pick)
         btn_row.addWidget(self.btn_sel)
         btn_row.addWidget(self.btn_generate)
         btn_row.addWidget(self.btn_close)
@@ -338,31 +396,105 @@ class RingProfileDialog(QDialog):
 
         # ---- 信号 ----
         self.btn_generate.clicked.connect(self._on_generate)
-        self.btn_center.clicked.connect(self._from_map_center)
+        self.btn_pick.clicked.connect(self._on_pick)
         self.btn_sel.clicked.connect(self._from_selection)
         self.btn_close.clicked.connect(self.close)
 
     # ------------------------------------------------------------------
     # 经纬度预填
     # ------------------------------------------------------------------
-    def _from_map_center(self):
+    # （经度/纬度字段名与控件的对应关系，供 _apply_rf_vals 统一处理）
+    RF_TARGETS = [
+        ("height", "height_sb", "挂高"),
+        ("mech_tilt", "mech_sb", "机械下倾"),
+        ("elec_tilt", "elec_sb", "电子下倾"),
+    ]
+
+    def _on_pick(self):
+        """进入一次性地图点选模式，等待用户在画布上点击。"""
         try:
             canvas = iface.mapCanvas()
-            center = canvas.center()
-            crs = canvas.mapSettings().destinationCrs()
-            if crs is not None and crs.authid() != "EPSG:4326":
-                xform = QgsCoordinateTransform(
-                    crs, QgsProject.instance().crsFromAuthId("EPSG:4326"),
-                    QgsProject.instance()
-                )
-                pt = xform.transform(center)
-            else:
-                pt = center
-            self.lon_le.setText(f"{pt.x():.6f}")
-            self.lat_le.setText(f"{pt.y():.6f}")
-            self.status_lbl.setText("已从地图中心获取经纬度。")
         except Exception as e:  # nosec
-            self.status_lbl.setText(f"获取地图中心失败: {e}")
+            self.status_lbl.setText(f"无法获取地图画布: {e}")
+            return
+        prev_tool = canvas.mapTool()
+        tool = RingPickTool(canvas, prev_tool=prev_tool)
+        tool.picked.connect(self._apply_pick)
+        # 必须长期持有引用：QGIS 只保存 C++ 指针，Python 对象被 GC 会悬空
+        self._pick_tool = tool
+        canvas.setMapTool(tool)
+        self.status_lbl.setText(
+            "请在地图上点击目标位置…（点完自动回到原工具；Esc 可中断）"
+        )
+
+    def _apply_pick(self, lon, lat, layer, feat):
+        """点选结果落地：有要素就连带 RF 参数，无要素只落经纬度。"""
+        try:
+            self.lon_le.setText(f"{lon:.6f}")
+            self.lat_le.setText(f"{lat:.6f}")
+
+            hit = (feat is not None and feat.isValid()
+                   and isinstance(layer, QgsVectorLayer))
+            if not hit:
+                self.status_lbl.setText(
+                    f"已取点 ({lat:.6f}, {lon:.6f}) — 该位置没有基站/扇区要素，"
+                    f"仅填入经纬度，挂高/下倾请手动填写。"
+                )
+                return
+
+            fields = list(layer.fields())
+            # 经纬度：字段优先（扇区图层几何质心 ≠ 天线位置）
+            lon_f = _match_field(fields, FIELD_CANDIDATES["longitude"])
+            lat_f = _match_field(fields, FIELD_CANDIDATES["latitude"])
+            coord_src = "点击点坐标"
+            if lon_f and lat_f:
+                try:
+                    self.lon_le.setText(f"{float(feat[lon_f]):.6f}")
+                    self.lat_le.setText(f"{float(feat[lat_f]):.6f}")
+                    coord_src = "要素经纬度字段"
+                except (ValueError, TypeError, KeyError):  # nosec
+                    pass
+
+            vals = extract_site_values(
+                {f.name(): feat[f.name()] for f in fields}, {}
+            )
+            got, miss = self._apply_rf_vals(vals)
+
+            msg = (f"已选中 [{layer.name()}] 要素 — 经纬度取自{coord_src}；"
+                   f"已带入：" + ("、".join(got) if got else "无"))
+            if miss:
+                msg += f"｜未识别({'/'.join(miss)})，请手动填写"
+            self.status_lbl.setText(msg)
+        except Exception as e:  # nosec
+            self.status_lbl.setText(f"点选取值失败: {e}")
+
+    def _apply_rf_vals(self, vals):
+        """把提取到的 RF 值填入控件，返回 (已取到, 未取到) 名称列表。"""
+        got, miss = [], []
+        for key, attr, label in self.RF_TARGETS:
+            sb = getattr(self, attr, None)
+            v = vals.get(key)
+            try:
+                fv = float(v) if v is not None else None
+            except (ValueError, TypeError):  # nosec
+                fv = None
+            if sb is not None and fv is not None:
+                sb.setValue(fv)
+                got.append(label)
+            else:
+                miss.append(label)
+
+        vbw = vals.get("v_beamwidth")
+        try:
+            vbw = float(vbw) if vbw is not None else None
+        except (ValueError, TypeError):  # nosec
+            vbw = None
+        if vbw is not None and 1 <= vbw <= 90:
+            self.vbw_sb.setValue(vbw)
+            got.append("波束宽度")
+        else:
+            miss.append("波束宽度")
+        return got, miss
 
     def _from_selection(self):
         try:
@@ -404,33 +536,17 @@ class RingProfileDialog(QDialog):
                 return
             self.lon_le.setText(f"{lon:.6f}")
             self.lat_le.setText(f"{lat:.6f}")
-            # 顺便带入挂高/下倾（若有字段）
+            # 顺便带入挂高/下倾/波束宽度（有对应字段才带入，并明确回报）
             vals = extract_site_values(
                 {f.name(): feat[f.name()] for f in fields}, {}
             )
-            if vals.get("height") is not None:
-                try:
-                    self.height_sb.setValue(float(vals["height"]))
-                except (ValueError, TypeError):  # nosec
-                    pass
-            if vals.get("mech_tilt") is not None:
-                try:
-                    self.mech_sb.setValue(float(vals["mech_tilt"]))
-                except (ValueError, TypeError):  # nosec
-                    pass
-            if vals.get("elec_tilt") is not None:
-                try:
-                    self.elec_sb.setValue(float(vals["elec_tilt"]))
-                except (ValueError, TypeError):  # nosec
-                    pass
-            if vals.get("v_beamwidth") is not None:
-                try:
-                    vbw = float(vals["v_beamwidth"])
-                    if 1 <= vbw <= 90:
-                        self.vbw_sb.setValue(vbw)
-                except (ValueError, TypeError):  # nosec
-                    pass
-            self.status_lbl.setText("已从选中要素获取经纬度与 RF 参数。")
+            got, miss = self._apply_rf_vals(vals)
+            coord_src = "经纬度字段" if (lon_f and lat_f) else "几何质心（图层无经纬度字段，位置可能偏）"
+            msg = (f"已取 [{layer.name()}] 选中要素 — {coord_src}；"
+                   f"已带入：" + ("、".join(got) if got else "无"))
+            if miss:
+                msg += f"｜未识别({'/'.join(miss)})，请手动填写"
+            self.status_lbl.setText(msg)
         except Exception as e:  # nosec
             self.status_lbl.setText(f"从选中要素获取失败: {e}")
 
