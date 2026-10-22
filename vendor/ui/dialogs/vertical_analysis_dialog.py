@@ -2777,14 +2777,14 @@ class VerticalAnalysisDialog(QDialog):
             self.online_status_label.setVisible(True)
             
             # Cek koneksi internet dengan quick timeout
-            import socket
+            # （修复：不再用 socket.setdefaulttimeout 污染全局，改用 _probe_open_meteo）
             try:
-                # Coba konek ke Open-Meteo API dengan timeout 3 detik
-                socket.setdefaulttimeout(3)
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.open-meteo.com", 80))
-                self.online_status_label.setText("🌐 Online: Connected")
-                self.online_status_label.setStyleSheet("color: #00b050; font-size: 10px; padding-left: 5px;")
-                self.status_label.setText("Ready - Using Open-Meteo API")
+                if self._probe_open_meteo():
+                    self.online_status_label.setText("🌐 Online: Connected")
+                    self.online_status_label.setStyleSheet("color: #00b050; font-size: 10px; padding-left: 5px;")
+                    self.status_label.setText("Ready - Using Open-Meteo API")
+                else:
+                    raise OSError("probe failed")
             except Exception as e:
                 self.online_status_label.setText("🌐 Online: No Connection")
                 self.online_status_label.setStyleSheet("color: #c1121f; font-size: 10px; padding-left: 5px;")
@@ -2845,20 +2845,88 @@ class VerticalAnalysisDialog(QDialog):
             return True, ""
             
         else:  # Online
-            import socket
-            try:
-                socket.setdefaulttimeout(3)
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.open-meteo.com", 80))
+            if self._probe_open_meteo():
                 return True, ""
-            except Exception as e:
-                return False, (
-                    "Unable to connect to Open-Meteo elevation service.\n\n"
-                    "This could be due to:\n"
-                    "• No internet connection\n"
-                    "• Firewall blocking the connection\n"
-                    "• Open-Meteo service temporarily unavailable\n\n"
-                    "Please check your internet connection or switch to 'Local DEM' source."
-                )
+            return False, (
+                "Unable to connect to Open-Meteo elevation service.\n\n"
+                "This could be due to:\n"
+                "• No internet connection\n"
+                "• Firewall blocking the connection\n"
+                "• Open-Meteo service temporarily unavailable\n\n"
+                "Please check your internet connection or switch to 'Local DEM' source."
+            )
+
+    @staticmethod
+    def _probe_open_meteo(timeout=3.0, retries=1):
+        """探测 Open-Meteo 可达性（供在线模式校验使用）。
+
+        修复原实现两个问题：
+          1. 原 socket.setdefaulttimeout(3) 会污染整个进程的默认超时；
+          2. 原来只探 80 端口，而真实 API 走 HTTPS 443，易误报。
+        现用独立 socket + settimeout，443/80 各试一次，可重试。
+        """
+        import socket
+        hosts = (("api.open-meteo.com", 443), ("api.open-meteo.com", 80))
+        for _ in range(retries + 1):
+            for host, port in hosts:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(timeout)
+                try:
+                    s.connect((host, port))
+                    return True
+                except OSError:
+                    continue
+                finally:
+                    try:
+                        s.close()
+                    except OSError:  # nosec
+                        pass
+        return False
+
+    def _try_fallback_to_local_dem(self):
+        """Open-Meteo 不可达时自动降级：在项目里找真正的 DEM 栅格重建 controller。
+
+        返回图层名（成功）或 None（项目里没有可用 DEM）。
+        排除 basemap 类图层与插件自建的 1×1 锚点（其高程无意义）。
+        成功后把 DEM 源下拉切回 Local，保证后续 _check_dem_availability 走本地分支。
+        """
+        from qgis.core import QgsRasterLayer
+        skip_keywords = [
+            'bing', 'osm', 'openstreetmap', 'google', 'map', 'satellite',
+            'imagery', 'basemap', 'sanwei', '三维', 'sector_tiltm_dem_anchor',
+        ]
+        candidates = []
+        for layer in QgsProject.instance().mapLayers().values():
+            if not isinstance(layer, QgsRasterLayer) or not layer.isValid():
+                continue
+            name = layer.name() or ""
+            low = name.lower()
+            if any(k in low for k in skip_keywords):
+                continue
+            if layer.crs() is None:
+                continue
+            candidates.append(layer)
+        if not candidates:
+            return None
+        dem_layer = candidates[0]
+        try:
+            from ...modules.vertical_analysis.module import VerticalAnalysisModule
+            module = VerticalAnalysisModule(dem_layer)
+            self.controller = module.controller
+        except Exception:  # nosec
+            import traceback
+            traceback.print_exc()
+            return None
+        self.dem_source_combo.blockSignals(True)
+        self.dem_source_combo.setCurrentIndex(0)
+        self.dem_source_combo.blockSignals(False)
+        try:
+            self.status_label.setText(
+                f"Ready - fallback local DEM: {dem_layer.name()}"
+            )
+        except Exception:  # nosec
+            pass
+        return dem_layer.name()
     
     # =====================================================
     # BASEMAP METHODS
@@ -4573,14 +4641,28 @@ class VerticalAnalysisDialog(QDialog):
         dem_available, dem_error = self._check_dem_availability()
         if not dem_available:
             source_name = "Local DEM" if self.dem_source_combo.currentIndex() == 0 else "Open-Meteo"
-            
-            QMessageBox.warning(
-                self,
-                f"{source_name} Unavailable",
-                dem_error
-            )
-            self.status_label.setText(f"Analysis failed: {source_name} source unavailable")
-            return
+
+            if self.dem_source_combo.currentIndex() != 0:
+                # Open-Meteo 不可达：优先自动降级到项目里的本地 DEM，不打断分析
+                fallback_name = self._try_fallback_to_local_dem()
+                if fallback_name is not None:
+                    try:
+                        from qgis.utils import iface
+                        iface.messageBar().pushWarning(
+                            "扇区Tilt分析",
+                            f"Open-Meteo 不可达，已自动改用本地 DEM「{fallback_name}」继续分析。"
+                        )
+                    except Exception:  # nosec
+                        print(f"[扇区Tilt分析] Open-Meteo 不可达，已降级本地 DEM: {fallback_name}")
+                    dem_available, dem_error = True, ""
+                else:
+                    QMessageBox.warning(self, f"{source_name} Unavailable", dem_error)
+                    self.status_label.setText(f"Analysis failed: {source_name} source unavailable")
+                    return
+            else:
+                QMessageBox.warning(self, f"{source_name} Unavailable", dem_error)
+                self.status_label.setText(f"Analysis failed: {source_name} source unavailable")
+                return
         
         # =====================================================
         # TAMBAHKAN: VALIDASI RF PARAMETERS
