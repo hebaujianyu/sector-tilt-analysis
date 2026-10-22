@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QHeaderView,
     QWidget, QScrollArea, QApplication, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QEvent
 from PyQt5.QtGui import QColor
 
 try:
@@ -224,6 +224,7 @@ class RingProfileDialog(QDialog):
         self._worker = None
         self._mini = []          # 8 个分方向小剖面 PlotWidget
         self._prog_done = 0
+        self._cell_size = None   # 九宫格当前正方形边长（防重复 setFixedSize）
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -335,15 +336,13 @@ class RingProfileDialog(QDialog):
 
         # ---- 右侧：3×3 九宫格（8 方向剖面按罗盘方位 + 中心玫瑰图）----
         if pg is not None:
-            grid_holder = QWidget()
-            grid = QGridLayout(grid_holder)
+            self._grid_holder = QWidget()
+            outer = QVBoxLayout(self._grid_holder)
+            outer.setContentsMargins(0, 0, 0, 0)
+            mid = QHBoxLayout()
+            mid.addStretch(1)   # 水平居中：格子固定正方形后余宽留白
+            grid = QGridLayout()
             grid.setSpacing(4)
-            # 等分行列：所有格子随窗口自适应、等大（配合 Ignored 尺寸策略，
-            # 消除标题文字长度导致的列宽不一与缩放变形）
-            for c in range(3):
-                grid.setColumnStretch(c, 1)
-            for r in range(3):
-                grid.setRowStretch(r, 1)
             # 罗盘方位排布：索引 = azimuth // 45
             #   (0,0)NW (0,1)N (0,2)NE
             #   (1,0)W  (1,1)玫瑰 (1,2)E
@@ -353,11 +352,10 @@ class RingProfileDialog(QDialog):
             self._mini = []
             for i in range(8):
                 pw = pg.PlotWidget(background="w")
-                # Ignored：无视控件 sizeHint（标题文字会把 hint 撑大，
-                # 造成各列宽度不一、缩放变形），完全跟随网格等分空间
+                # Ignored：无视控件 sizeHint，完全跟随固定正方形尺寸
                 pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-                pw.setMinimumHeight(120)
-                pw.setMinimumWidth(120)
+                pw.setMinimumHeight(80)
+                pw.setMinimumWidth(80)
                 pw.showGrid(x=True, y=True, alpha=0.25)
                 # 性能优化（与 vendor TerrainProfileWidget 一致）
                 pw.setClipToView(True)
@@ -375,18 +373,26 @@ class RingProfileDialog(QDialog):
                 grid.addWidget(pw, r, c)
                 self._mini.append(pw)
 
-            # 中心：阻挡玫瑰图（同样 Ignored，保证九宫格等大）
+            # 中心：阻挡玫瑰图（同样固定正方形，保证九宫格等大）
             self.rose_pw = pg.PlotWidget(background="w")
             self.rose_pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-            self.rose_pw.setMinimumHeight(120)
-            self.rose_pw.setMinimumWidth(120)
+            self.rose_pw.setMinimumHeight(80)
+            self.rose_pw.setMinimumWidth(80)
             self.rose_pw.setAspectLocked(True)
             self.rose_pw.hideAxis("left")
             self.rose_pw.hideAxis("bottom")
             grid.addWidget(self.rose_pw, 1, 1)
+            mid.addLayout(grid)
+            mid.addStretch(1)
+            outer.addStretch(1)  # 垂直居中
+            outer.addLayout(mid)
+            outer.addStretch(1)
+            # 窗口/容器尺寸变化 → 重算正方形边长（s = min(宽,高)/3）
+            self._grid_holder.installEventFilter(self)
             top.addLayout(left_col)
-            top.addWidget(grid_holder, 1)
+            top.addWidget(self._grid_holder, 1)
         else:
+            self._grid_holder = None
             self.rose_pw = None
             self._mini = []
             top.addLayout(left_col)
@@ -399,6 +405,34 @@ class RingProfileDialog(QDialog):
         self.btn_pick.clicked.connect(self._on_pick)
         self.btn_sel.clicked.connect(self._from_selection)
         self.btn_close.clicked.connect(self.close)
+
+    # ------------------------------------------------------------------
+    # 九宫格正方形格子：容器尺寸变化时重算边长 s = min(宽,高) / 3
+    # ------------------------------------------------------------------
+    def eventFilter(self, obj, event):
+        if (obj is getattr(self, "_grid_holder", None)
+                and event.type() == QEvent.Resize):
+            self._fit_grid_cells()
+        return super().eventFilter(obj, event)
+
+    def _fit_grid_cells(self):
+        holder = getattr(self, "_grid_holder", None)
+        widgets = list(self._mini)
+        if self.rose_pw is not None:
+            widgets.append(self.rose_pw)
+        if holder is None or not widgets:
+            return
+        w, h = holder.width(), holder.height()
+        if w <= 0 or h <= 0:
+            return
+        spacing = 4  # 与 grid.setSpacing 一致
+        s = (min(w, h) - 2 * spacing) // 3
+        s = max(80, int(s))
+        if s == self._cell_size:
+            return
+        self._cell_size = s
+        for pw in widgets:
+            pw.setFixedSize(s, s)
 
     # ------------------------------------------------------------------
     # 经纬度预填
@@ -681,7 +715,21 @@ class RingProfileDialog(QDialog):
         by_az = {r["az"]: r for r in results}
         user_max = self.maxdist_sb.value()
 
-        # ---- 2×4 八宫格：每方向一张独立剖面 ----
+        # ---- 全局统一 Y 量程：8 张图共用，刻度完全对齐 ----
+        # 上界 = max(塔顶 sg+h, 最高地形) × 1.08；下界锁 0（地形本身为负时取地形最低点）
+        y_top = 0.0
+        y_bottom = 0.0
+        for res in results:
+            elevs = res.get("elevs") or []
+            y_top = max(y_top,
+                        res["site_ground"] + self.height_sb.value(),
+                        max(elevs) if elevs else 0.0)
+            y_bottom = min(y_bottom, min(elevs) if elevs else 0.0)
+        if y_top <= 0:
+            y_top = 100.0
+        y_top = y_top * 1.08 + 1.0
+
+        # ---- 3×3 九宫格：每方向一张独立剖面 ----
         for i, pw in enumerate(self._mini):
             pw.clear()
             az = i * 45
@@ -690,15 +738,16 @@ class RingProfileDialog(QDialog):
                 reason = next(
                     (m for a, m in self._failures if a == az), "无数据"
                 )
-                self._draw_mini_empty(pw, az, reason, user_max)
+                self._draw_mini_empty(pw, az, reason, user_max,
+                                      y_bottom, y_top)
             else:
-                self._draw_mini(pw, res, user_max)
+                self._draw_mini(pw, res, user_max, y_bottom, y_top)
 
         # ---- 阻挡玫瑰图 ----
         if self.rose_pw is not None:
             self._render_rose(results, user_max)
 
-    def _draw_mini(self, pw, res, user_max):
+    def _draw_mini(self, pw, res, user_max, y0, y1):
         az = res["az"]
         label = AZ_TO_LABEL.get(az, f"{az}°")
         dists, elevs, beam = res["dists"], res["elevs"], res["beam"]
@@ -707,9 +756,9 @@ class RingProfileDialog(QDialog):
         sg = res["site_ground"]
         h = self.height_sb.value()
 
-        # ---- 地形（Tab1 同款：赭黄实填充 + 红棕脊线）----
+        # ---- 地形（Tab1 同款：赭黄实填充 + 红棕脊线；填到 Y 轴下限 0 基线）----
         pw.plot(dists, elevs, pen=pg.mkPen("#A0522D", width=2),
-                fillLevel=min(elevs),
+                fillLevel=y0,
                 fillBrush=pg.mkBrush(205, 133, 63, 170))
 
         # ---- 主波束（绿实线）+ 上/下波束（蓝/红虚线，总下倾±垂直波束宽度/2）----
@@ -769,16 +818,22 @@ class RingProfileDialog(QDialog):
         title = (f"{label} · 畅通" if clear
                  else f"{label} · {fo:.0f}m 遮挡")
         pw.setTitle(title)
-        pw.setXRange(0, user_max)
+        # 锁定显示范围：X 留塔桅余量，Y 下限锁 0 —— 波束超出 0 以下直接裁掉，
+        # 量程固定不随数据跳变（padding=0 保证 8 图刻度完全一致）
+        x0 = -user_max * 0.02
+        pw.setXRange(x0, user_max, padding=0)
+        pw.setYRange(y0, y1, padding=0)
+        pw.setLimits(xMin=x0, xMax=user_max, yMin=y0, yMax=y1)
 
-    def _draw_mini_empty(self, pw, az, reason, user_max):
+    def _draw_mini_empty(self, pw, az, reason, user_max, y0, y1):
         label = AZ_TO_LABEL.get(az, f"{az}°")
         pw.setTitle(f"{label} · 采样失败")
         t = pg.TextItem(f"✗ {reason}", color="#d62728", anchor=(0.5, 0.5))
-        t.setPos(user_max / 2.0, 0.5)
+        t.setPos(user_max / 2.0, (y0 + y1) / 2.0)
         pw.addItem(t)
-        pw.setXRange(0, user_max)
-        pw.setYRange(0, 1)
+        pw.setXRange(0, user_max, padding=0)
+        pw.setYRange(y0, y1, padding=0)
+        pw.setLimits(xMin=0, xMax=user_max, yMin=y0, yMax=y1)
 
     def _render_rose(self, results, user_max):
         pw = self.rose_pw
