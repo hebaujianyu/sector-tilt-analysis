@@ -1438,7 +1438,7 @@ class VerticalAnalysisDialog(QDialog):
         # =====================================================
 
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(5, 10, 10, 10)
+        main_layout.setContentsMargins(4, 4, 6, 4)
         main_layout.setSpacing(5)
         self.setLayout(main_layout)
 
@@ -1449,8 +1449,8 @@ class VerticalAnalysisDialog(QDialog):
         # Buat scroll area terlebih dahulu
         self.input_scroll = QScrollArea()
         self.input_scroll.setWidgetResizable(True)
-        self.input_scroll.setMinimumWidth(360)
-        self.input_scroll.setMaximumWidth(420)
+        self.input_scroll.setMinimumWidth(250)
+        self.input_scroll.setMaximumWidth(300)
         self.input_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.input_scroll.setStyleSheet("""
             QScrollArea {
@@ -1479,7 +1479,7 @@ class VerticalAnalysisDialog(QDialog):
         # Buat card sebagai widget di dalam scroll area
         inputs_card = QFrame()
         inputs_card.setProperty("class", "card")
-        inputs_card.setFixedWidth(390)  # <-- DARI 340 MENJADI 390
+        inputs_card.setFixedWidth(272)  # v0.4.15: 390 -> 272（紧凑参数区）
         inputs_card.setStyleSheet("""
             QFrame.card {
                 background: #ffffff;
@@ -1496,7 +1496,7 @@ class VerticalAnalysisDialog(QDialog):
         title = QLabel("射频参数")
         title.setProperty("class", "section_title")
         card_layout.addWidget(title)
-        card_layout.setSpacing(8)  # <-- TAMBAHKAN, dari default jadi 8 # KURANGI SPACING BAWAH TITLE
+        card_layout.setSpacing(4)  # v0.4.15: 8 -> 4
 
         # Tab widget
         self.tab_widget = QTabWidget()
@@ -1512,54 +1512,57 @@ class VerticalAnalysisDialog(QDialog):
         
         self.tab_basic = QWidget()
         basic_layout = QVBoxLayout(self.tab_basic)
-        basic_layout.setSpacing(10)
+        basic_layout.setSpacing(4)
         
         # =====================================================
-        # SECTION 1: SITE LOCATION (DIPINDAH KE ATAS)
+        # SECTION 1+2: SITE + RF（合并为单一分组，紧凑布局）
+        # v0.4.15：原「站点位置」「射频参数」两框合并，减少分框与留白；
+        # 行距/内边距/输入框宽度全面收紧，参数区无需滚动即可看完。
         # =====================================================
-        site_group = QGroupBox("站点位置")
-        site_group.setFixedWidth(340)
-        site_group.setMaximumHeight(150)
-        site_group.setStyleSheet("""
+        _compact_group_style = """
             QGroupBox {
                 font-weight: bold;
                 border: 1px solid #c9d9e0;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 10px;
-                padding-left: 15px;
-                padding-right: 15px;
+                border-radius: 6px;
+                margin-top: 16px;
+                padding-top: 0px;
+                padding-left: 6px;
+                padding-right: 6px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
+                left: 8px;
+                padding: 0 4px 0 4px;
             }
-        """)
-        
-        site_layout = QFormLayout(site_group)
-        site_layout.setLabelAlignment(Qt.AlignLeft)
-        site_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        site_layout.setContentsMargins(12, 12, 12, 12)
-        site_layout.setSpacing(6)
-        site_layout.setHorizontalSpacing(70)
-        
-        # Atur lebar minimum untuk spinbox agar seragam
-        spinbox_width = 170
-        
+        """
+
+        param_group = QGroupBox("站点与射频参数")
+        param_group.setStyleSheet(_compact_group_style)
+
+        param_layout = QFormLayout(param_group)
+        param_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        param_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        param_layout.setContentsMargins(6, 5, 6, 4)
+        param_layout.setSpacing(3)
+        param_layout.setHorizontalSpacing(6)
+
+        # 输入框统一窄宽度：数字类 96px 足够显示 10000 m / 359.99°；
+        # 经纬度 104px 保证 39.904200 十字符完整显示
+        spinbox_width = 96
+
         # Latitude
         self.latitude_input = QLineEdit()
         self.latitude_input.setText("39.904200")
         self.latitude_input.setPlaceholderText("39.904200")
-        self.latitude_input.setFixedWidth(spinbox_width)
-        site_layout.addRow("纬度:", self.latitude_input)
+        self.latitude_input.setFixedWidth(104)
+        param_layout.addRow("纬度:", self.latitude_input)
 
         # Longitude
         self.longitude_input = QLineEdit()
         self.longitude_input.setText("116.407400")
         self.longitude_input.setPlaceholderText("116.407400")
-        self.longitude_input.setFixedWidth(spinbox_width)
-        site_layout.addRow("经度:", self.longitude_input)
+        self.longitude_input.setFixedWidth(104)
+        param_layout.addRow("经度:", self.longitude_input)
 
         # Azimuth
         self.azimuth_spin = QDoubleSpinBox()
@@ -1569,58 +1572,16 @@ class VerticalAnalysisDialog(QDialog):
         self.azimuth_spin.setValue(90)
         self.azimuth_spin.setSuffix("°")
         self.azimuth_spin.setFixedWidth(spinbox_width)
-        site_layout.addRow("Azimuth:", self.azimuth_spin)
-        
-        basic_layout.addWidget(site_group, 0, Qt.AlignLeft)
+        param_layout.addRow("Azimuth:", self.azimuth_spin)
         
         # =====================================================
-        # SECTION 2: RF PARAMETERS
+        # SECTION 2: RF PARAMETERS（并入上方「站点与射频参数」分组）
         # =====================================================
-        rf_group = QGroupBox("射频参数")
-        rf_group.setFixedWidth(340)  # <-- TAMBAHKAN
-        rf_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #c9d9e0;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 10px;
-                padding-left: 15px;  /* <-- TAMBAHKAN INI */
-                padding-right: 15px; /* <-- TAMBAHKAN INI */
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-        
-        rf_layout = QFormLayout(rf_group)
-        rf_layout.setLabelAlignment(Qt.AlignLeft)  # <-- UBAH KE RATA KIRI
-        rf_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        rf_layout.setContentsMargins(12, 12, 12, 12)  # <-- KURANGI JADI 12 SEMUA
-        rf_layout.setSpacing(10)
-        rf_layout.setHorizontalSpacing(15)  # <-- TAMBAHKAN INI untuk jarak label-spinbox
-        
-        # =====================================================
-        # FIX: PERLEBAR KOLOM LABEL (TAMBAHKAN INI)
-        # =====================================================
-        # Set label column stretch agar tidak terlalu sempit
-        rf_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        # Beri minimum width untuk kolom label
-        for i in range(rf_layout.rowCount()):
-            label_item = rf_layout.itemAt(i, QFormLayout.LabelRole)
-            if label_item and label_item.widget():
-                label_item.widget().setMinimumWidth(150)  # <-- TAMBAHKAN INI
-        
-        # Atur lebar minimum untuk spinbox agar seragam
-        spinbox_width = 170  # <-- KURANGI SEDIKIT AGAR LEBIH PROPORSIONAL
-
         # UNIT SYSTEM
         self.unit_combo = QComboBox()
         self.unit_combo.setFixedWidth(spinbox_width)
         self.unit_combo.addItems(["公制 (m, km)", "英制 (ft, mi)"])
-        rf_layout.addRow("单位制:", self.unit_combo)
+        param_layout.addRow("单位制:", self.unit_combo)
 
         # ANTENNA HEIGHT
         self.height_spin = QDoubleSpinBox()
@@ -1629,7 +1590,7 @@ class VerticalAnalysisDialog(QDialog):
         self.height_spin.setSuffix(" m")
         self.height_spin.setFixedWidth(spinbox_width)
         # HAPUS self.height_spin.setAlignment(Qt.AlignRight)
-        rf_layout.addRow("天线挂高:", self.height_spin)
+        param_layout.addRow("天线挂高:", self.height_spin)
 
         # MECHANICAL TILT
         self.mech_tilt_spin = QDoubleSpinBox()
@@ -1638,7 +1599,7 @@ class VerticalAnalysisDialog(QDialog):
         self.mech_tilt_spin.setSuffix("°")
         self.mech_tilt_spin.setFixedWidth(spinbox_width)
         # HAPUS self.mech_tilt_spin.setAlignment(Qt.AlignRight)
-        rf_layout.addRow("机械下倾:", self.mech_tilt_spin)
+        param_layout.addRow("机械下倾:", self.mech_tilt_spin)
 
         # ELECTRICAL TILT
         self.elec_tilt_spin = QDoubleSpinBox()
@@ -1647,7 +1608,7 @@ class VerticalAnalysisDialog(QDialog):
         self.elec_tilt_spin.setSuffix("°")
         self.elec_tilt_spin.setFixedWidth(spinbox_width)
         # HAPUS self.elec_tilt_spin.setAlignment(Qt.AlignRight)
-        rf_layout.addRow("电子下倾:", self.elec_tilt_spin)
+        param_layout.addRow("电子下倾:", self.elec_tilt_spin)
 
         # TOTAL TILT (READONLY)
         total_layout = QHBoxLayout()
@@ -1657,7 +1618,7 @@ class VerticalAnalysisDialog(QDialog):
         self.total_tilt_label = QLabel(f"{initial_total:.1f}°")
         
         # Set fixed width dan height agar tidak berubah
-        self.total_tilt_label.setFixedWidth(80)
+        self.total_tilt_label.setFixedWidth(56)
         self.total_tilt_label.setFixedHeight(20)
         self.total_tilt_label.setAlignment(Qt.AlignCenter)
         
@@ -1671,7 +1632,7 @@ class VerticalAnalysisDialog(QDialog):
         
         total_layout.addWidget(self.total_tilt_label)
         total_layout.addStretch()
-        rf_layout.addRow("总下倾:", total_layout)
+        param_layout.addRow("总下倾:", total_layout)
 
         # VERTICAL BEAMWIDTH
         self.beamwidth_spin = QDoubleSpinBox()
@@ -1682,7 +1643,7 @@ class VerticalAnalysisDialog(QDialog):
         self.beamwidth_spin.setSuffix("°")
         self.beamwidth_spin.setFixedWidth(spinbox_width)
         # HAPUS self.beamwidth_spin.setAlignment(Qt.AlignRight)
-        rf_layout.addRow("垂直波瓣角:", self.beamwidth_spin)
+        param_layout.addRow("垂直波瓣角:", self.beamwidth_spin)
 
         # HORIZONTAL BEAMWIDTH
         self.h_beamwidth_spin = QDoubleSpinBox()
@@ -1691,38 +1652,22 @@ class VerticalAnalysisDialog(QDialog):
         self.h_beamwidth_spin.setSuffix("°")
         self.h_beamwidth_spin.setFixedWidth(spinbox_width)
         # HAPUS self.h_beamwidth_spin.setAlignment(Qt.AlignRight)
-        rf_layout.addRow("水平波瓣角:", self.h_beamwidth_spin)
-        basic_layout.addWidget(rf_group, 0, Qt.AlignLeft)
+        param_layout.addRow("水平波瓣角:", self.h_beamwidth_spin)
+        basic_layout.addWidget(param_group)
+
 
         # =====================================================
-        # SECTION 3: ANALYSIS RANGE
+        # SECTION 3+4: ANALYSIS RANGE + DATA SOURCE（合并为「分析与数据源」）
         # =====================================================
-        range_group = QGroupBox("分析范围")
-        range_group.setFixedWidth(340)  # <-- TAMBAHKAN
-        range_group.setMaximumHeight(100)  # <-- TAMBAHKAN INI
-        range_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #c9d9e0;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 10px;
-                padding-left: 15px;
-                padding-right: 15px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-        
-        range_layout = QFormLayout(range_group)
-        range_layout.setLabelAlignment(Qt.AlignLeft)
-        range_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        range_layout.setContentsMargins(12, 12, 12, 12)  # <-- KURANGI JADI 12 SEMUA
-        range_layout.setSpacing(6)  # <-- TAMBAHKAN
-        range_layout.setHorizontalSpacing(55)
+        ds_group = QGroupBox("分析与数据源")
+        ds_group.setStyleSheet(_compact_group_style)
+
+        ds_layout = QFormLayout(ds_group)
+        ds_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        ds_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        ds_layout.setContentsMargins(6, 5, 6, 4)
+        ds_layout.setSpacing(3)
+        ds_layout.setHorizontalSpacing(6)
 
 
         # MAX DISTANCE
@@ -1732,7 +1677,7 @@ class VerticalAnalysisDialog(QDialog):
         self.distance_spin.setSingleStep(10)
         self.distance_spin.setSuffix(" m")
         self.distance_spin.setFixedWidth(spinbox_width)
-        range_layout.addRow("最大距离:", self.distance_spin)
+        ds_layout.addRow("最大距离:", self.distance_spin)
 
         # DISTANCE SLIDER
         slider_layout = QHBoxLayout()
@@ -1744,46 +1689,12 @@ class VerticalAnalysisDialog(QDialog):
         self.distance_label = QLabel("5000 m")
         self.distance_label.setFixedWidth(40)
         slider_layout.addWidget(self.distance_slider)
-        slider_layout.setSpacing(10)  # <-- TAMBAHKAN
+        slider_layout.setSpacing(4)
         slider_layout.addWidget(self.distance_label)
-        range_layout.addRow("", slider_layout)        
-        basic_layout.addWidget(range_group, 0, Qt.AlignLeft)
+        ds_layout.addRow("", slider_layout)
         
         # =====================================================
-        # SECTION 4: DATA SOURCE
-        # =====================================================
-        source_group = QGroupBox("数据源")
-        source_group.setFixedWidth(340)
-        source_group.setMaximumHeight(130)  # <-- TAMBAHKAN
-        source_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #c9d9e0;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 10px;
-                padding-left: 15px;
-                padding-right: 15px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-
-        # Gunakan QFormLayout untuk source_layout agar konsisten
-        source_layout = QFormLayout(source_group)
-        source_layout.setLabelAlignment(Qt.AlignLeft)
-        source_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        source_layout.setContentsMargins(12, 12, 12, 12)
-        source_layout.setSpacing(6)
-        source_layout.setHorizontalSpacing(15)
-        
-        
-
-        # =====================================================
-        # DEM SOURCE (menggunakan QFormLayout)
+        # SECTION 4: DATA SOURCE（并入上方「分析与数据源」分组）
         # =====================================================
 
         # Container untuk DEM combobox + status label
@@ -1809,7 +1720,7 @@ class VerticalAnalysisDialog(QDialog):
         self.online_status_label.setVisible(True)
         dem_container_layout.addWidget(self.online_status_label)
 
-        source_layout.addRow("DEM数据源:", dem_container)
+        ds_layout.addRow("DEM数据源:", dem_container)
 
         # =====================================================
         # BASEMAP SELECTION
@@ -1846,30 +1757,31 @@ class VerticalAnalysisDialog(QDialog):
         basemap_container_layout.addWidget(self.refresh_basemap_btn)
         basemap_container_layout.addStretch()  # Ini penting agar tombol tetap di kanan
        
-        source_layout.addRow("底图:", basemap_container)
+        ds_layout.addRow("底图:", basemap_container)
+        basic_layout.addWidget(ds_group)
         
         # =====================================================
         # TAMBAHKAN: Hubungkan signal untuk mengganti basemap secara real-time
         # =====================================================
         self.basemap_combo.currentIndexChanged.connect(self._on_basemap_changed)
         
-        basic_layout.addWidget(source_group, 0, Qt.AlignLeft)
+
         
         # =====================================================
         # SECTION 5: ACTIONS
         # =====================================================
         action_layout = QHBoxLayout()
-        action_layout.setContentsMargins(10, 10, 10, 10)
+        action_layout.setContentsMargins(4, 6, 4, 2)
         
         self.run_button = QPushButton("运行分析")
         self.run_button.setProperty("class", "primary")
         # self.run_button.setMinimumHeight(35)
-        self.run_button.setMinimumWidth(130)
+        self.run_button.setMinimumWidth(96)
         
         self.reset_button = QPushButton("重置")
         self.reset_button.setProperty("class", "secondary")
         # self.reset_button.setMinimumHeight(35)
-        self.reset_button.setMinimumWidth(130)
+        self.reset_button.setMinimumWidth(96)
         
         action_layout.addWidget(self.reset_button)
         action_layout.addWidget(self.run_button)
@@ -1889,8 +1801,8 @@ class VerticalAnalysisDialog(QDialog):
                 background: #f0f5f8;
                 border: 1px solid #c9d9e0;
                 border-radius: 8px;
-                padding: 10px;
-                margin-top: 5px;
+                padding: 6px;
+                margin-top: 3px;
                 color: #2c5a6b;
             }
         """)
