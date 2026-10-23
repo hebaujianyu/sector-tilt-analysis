@@ -2,6 +2,23 @@
 
 本插件所有版本变更记录（对应 metadata.txt 中 `version`）。
 
+## [0.4.16] - 2026-10-23
+### Added
+- **「设为默认」星标（★）**：Tab1「DEM数据源」「底图」、Tab2「地形源」三个下拉右侧各加一个 ★ 按钮，点一下即把当前选择写入 QGIS 全局设置，之后每次打开工具箱自动生效，不必反复手动切换。存过之后星标由灰变金。
+- 新增 `settings_store.py`：统一用 `QgsSettings` 持久化 `dem_source_index` / `basemap_name` / `ring_source_index`，跨工程、跨 QGIS 会话保留。
+
+### Changed
+- **点选传参不再强制重置数据源**（原 `fill_dialog()` 无条件 `setCurrentIndex(CONFIG["dem_source_index"])`，导致每次点选扇区都被打回在线，这是「每次都得换」的根因）。现在优先级改为：用户 ★ 保存的默认 → 智能默认 → CONFIG 兜底。
+- 智能默认：工程里已加载可用 DEM/DSM 栅格时自动选「本地DEM (离线)」，否则才回落在线。
+- **清理用户可见的 TiltMaster 字样**：插件管理器「关于」面板（metadata.txt about）与 Excel 导出元数据不再出现 TiltMaster；vendor/ 源文件头部的版权许可注释按 GPLv3 要求保留（不影响界面显示）。
+- 使用说明（docs/使用说明.md）更新至 v0.4.16：新增 3.5「数据源切换与设为默认」章节、Tab2 环向剖面实拍截图（img/ring_profile_example.png）、常见问题补充配额限流与默认被重置两项。
+
+### Fixed
+- **在线模式不再假死 30 秒**。实测 Open-Meteo 返回 `429 {"reason":"Daily API request limit exceeded"}`，原逻辑按 5s/10s/15s 退避重试三次、失败后又走 chunked 模式整轮重来，累计白等几十秒且必定拿不到数据，界面表现为「卡住」。现在识别到日配额耗尽立即抛 `QuotaExceededError`（中文提示引导切本地），完全跳过无意义重试；chunk 模式同样处理。
+- 临时性 429（非日配额）退避缩短为 3s 递增。
+- 在线取数失败的兜底提示改为中文，并明确建议切「本地DEM (离线)」。
+- `_push_info()` 兜底：无 iface / 无 GUI 环境下推消息不再抛 AttributeError。
+
 ## [0.4.9] - 2026-10-22
 ### Added
 - **环向剖面新增「在地图上点选取点」**（替代「从地图中心获取」）：在地图上点击目标位置——点位上有基站/扇区要素则自动带入经纬度+挂高+机械下倾+电子下倾+垂直波束宽度；点位是空地则只落经纬度、RF 参数手动填。点完自动恢复原地图工具。

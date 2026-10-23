@@ -742,38 +742,60 @@ def fill_dialog(dialog, values):
     # 最大分析距离（固定 2000m）
     _set_sb("distance_spin",  2000, 0, 10000)
 
-    # DEM Source（固定 Open-Meteo Online）
+    # DEM Source：优先用户 ★ 保存的默认 → 其次智能默认 → 最后 CONFIG 兜底
+    # （原逻辑无条件 setCurrentIndex(CONFIG[...])，导致用户每次点选都被重置回在线）
     dem_combo = getattr(dialog, "dem_source_combo", None)
     if dem_combo is not None:
-        dem_combo.setCurrentIndex(CONFIG["dem_source_index"])
+        idx = None
+        try:
+            from .settings_store import get_dem_source
+            saved = get_dem_source(None)
+            if saved in (0, 1):
+                idx = saved
+        except Exception:  # nosec
+            pass
+        if idx is None:
+            # 智能默认：工程里已有可用 DEM/DSM 栅格 → 本地（离线秒级）；否则在线
+            idx = 0 if _find_dem_layer() is not None else CONFIG["dem_source_index"]
+        dem_combo.setCurrentIndex(idx)
         filled.append(("dem_source_combo", dem_combo.currentText()))
 
-    # Basemap（模糊匹配）
+    # Basemap：优先用户 ★ 保存的图层名，没存过才走关键词模糊匹配
     bm_combo = getattr(dialog, "basemap_combo", None)
     if bm_combo is not None:
-        kw = CONFIG["basemap_keyword"].lower()
-        var_kw = _get_project_var("basemap_keyword")
-        if var_kw:
-            kw = var_kw.lower()
-
         idx = -1
-        # 精确匹配优先
-        for i in range(bm_combo.count()):
-            if bm_combo.itemText(i).lower() == kw:
-                idx = i
-                break
-        # 模糊匹配兜底
+        try:
+            from .settings_store import get_basemap
+            saved_bm = get_basemap(None)
+            if saved_bm:
+                idx = bm_combo.findText(saved_bm)
+        except Exception:  # nosec
+            pass
+
         if idx < 0:
+            kw = CONFIG["basemap_keyword"].lower()
+            var_kw = _get_project_var("basemap_keyword")
+            if var_kw:
+                kw = var_kw.lower()
+
+            # 精确匹配优先
             for i in range(bm_combo.count()):
-                if kw in bm_combo.itemText(i).lower():
+                if bm_combo.itemText(i).lower() == kw:
                     idx = i
                     break
+            # 模糊匹配兜底
+            if idx < 0:
+                for i in range(bm_combo.count()):
+                    if kw in bm_combo.itemText(i).lower():
+                        idx = i
+                        break
+
         if idx >= 0:
             bm_combo.setCurrentIndex(idx)
             filled.append(("basemap_combo", bm_combo.currentText()))
         else:
             filled.append(("basemap_combo",
-                           f"NOT FOUND (kw='{kw}', items={bm_combo.count()})"))
+                           f"NOT FOUND (kw='{CONFIG['basemap_keyword']}', items={bm_combo.count()})"))
 
     return filled
 

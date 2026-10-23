@@ -54,6 +54,32 @@ from .tilt_core import (
     find_feature_at_point,
 )
 
+# 「设为默认」星标按钮样式：未存过=灰星，已存=金星
+_PIN_OFF_STYLE = (
+    "QPushButton{font-size:13px; padding:0px; border:1px solid #bfbfbf;"
+    "border-radius:3px; background:#f5f5f5; color:#8a8a8a;}"
+    "QPushButton:hover{background:#e6e6e6; color:#333;}"
+)
+_PIN_ON_STYLE = (
+    "QPushButton{font-size:13px; padding:0px; border:1px solid #c9a227;"
+    "border-radius:3px; background:#fff8dc; color:#b8860b;}"
+    "QPushButton:hover{background:#ffeeba;}"
+)
+
+
+def _get_store():
+    """拿到 settings_store 模块（兼容相对 / 绝对两种导入方式）。"""
+    try:
+        from . import settings_store as mod
+        return mod
+    except Exception:  # nosec
+        pass
+    try:
+        import sector_tiltm_auto.settings_store as mod  # noqa
+        return mod
+    except Exception:  # nosec
+        return None
+
 # 8 个方向标签与固定配色（必须按方位角映射，禁止按结果下标取）
 DIRECTION_LABELS = ["N (0°)", "NE (45°)", "E (90°)", "SE (135°)",
                     "S (180°)", "SW (225°)", "W (270°)", "NW (315°)"]
@@ -287,7 +313,29 @@ class RingProfileDialog(QDialog):
 
         self.source_combo = QComboBox()
         self.source_combo.addItems(["本地 DEM (离线)", "Open-Meteo (在线)"])
-        self.source_combo.setCurrentIndex(1)  # 默认在线
+        self.source_combo.setCurrentIndex(1)
+        self.source_combo.setToolTip(
+            "选择地形高程来源:\n"
+            "• 本地 DEM: 读 QGIS 工程里已加载的 DEM/DSM 栅格（离线，秒级）\n"
+            "• Open-Meteo: 在线取高程（每日有配额限制，超限会失败）\n\n"
+            "点右侧 ★ 可把当前选择存为默认，之后每次打开自动生效。"
+        )
+
+        src_row = QHBoxLayout()
+        src_row.setContentsMargins(0, 0, 0, 0)
+        src_row.setSpacing(3)
+        src_row.addWidget(self.source_combo)
+        self.pin_src_btn = QPushButton("★")
+        self.pin_src_btn.setFixedSize(25, 25)
+        self.pin_src_btn.setCursor(Qt.PointingHandCursor)
+        self.pin_src_btn.setToolTip(
+            "设为默认：把当前【地形源】记住\n"
+            "下次打开工具箱自动选中它，不用再手动切换。"
+        )
+        self.pin_src_btn.setStyleSheet(_PIN_OFF_STYLE)
+        self.pin_src_btn.clicked.connect(self._on_pin_source)
+        src_row.addWidget(self.pin_src_btn)
+        src_row.addStretch()
 
         form.addRow("纬度 Lat:", self.lat_le)
         form.addRow("经度 Lon:", self.lon_le)
@@ -297,7 +345,7 @@ class RingProfileDialog(QDialog):
         form.addRow("垂直波束宽度:", self.vbw_sb)
         form.addRow("最大距离:", self.maxdist_sb)
         form.addRow("采样步长:", self.step_sb)
-        form.addRow("地形源:", self.source_combo)
+        form.addRow("地形源:", src_row)
 
         btn_row = QHBoxLayout()
         self.btn_pick = QPushButton("在地图上点选取点")
@@ -406,6 +454,9 @@ class RingProfileDialog(QDialog):
         self.btn_pick.clicked.connect(self._on_pick)
         self.btn_close.clicked.connect(self.close)
 
+        # 恢复上次「设为默认」的地形源
+        self._restore_default_source()
+
     # ------------------------------------------------------------------
     # 九宫格正方形容器：页尺寸变化时把右侧容器固定为正方形
     # side = min(页宽-左列最小宽, 页高) → 3×格边长 = side - 2×间距，格子必然正方形。
@@ -442,6 +493,31 @@ class RingProfileDialog(QDialog):
         ("mech_tilt", "mech_sb", "机械下倾"),
         ("elec_tilt", "elec_sb", "电子下倾"),
     ]
+
+    # ------------------------------------------------------------------
+    # 「设为默认」——把地形源选择持久化
+    # ------------------------------------------------------------------
+    def _on_pin_source(self):
+        mod = _get_store()
+        if mod is None:
+            self.status_lbl.setText("无法访问设置存储（settings_store 导入失败）")
+            return
+        idx = self.source_combo.currentIndex()
+        mod.set_ring_source(idx)
+        self.pin_src_btn.setStyleSheet(_PIN_ON_STYLE)
+        self.status_lbl.setText(
+            "已把【%s】设为默认地形源" % self.source_combo.currentText()
+        )
+
+    def _restore_default_source(self):
+        mod = _get_store()
+        if mod is None:
+            return
+        idx = mod.get_ring_source(None)
+        if idx in (0, 1) and idx != self.source_combo.currentIndex():
+            self.source_combo.setCurrentIndex(idx)
+        if mod.get_ring_source(None) in (0, 1):
+            self.pin_src_btn.setStyleSheet(_PIN_ON_STYLE)
 
     def _on_pick(self):
         """进入一次性地图点选模式，等待用户在画布上点击。"""

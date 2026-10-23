@@ -22,6 +22,46 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 terrain_sampler.py - dengan threading support
 """
 
+
+class QuotaExceededError(Exception):
+    """Open-Meteo 每日配额已用尽（按 IP，跨天才恢复）。
+
+    抛出它而不是返回 None，是为了阻止上层继续走 chunked fallback——
+    那会把同样的失败请求重发一遍，再各退避三次，白等几十秒。
+    """
+
+    def __init__(self, reason=""):
+        self.reason = reason
+        super().__init__(
+            "在线高程服务（Open-Meteo）今日配额已用尽，一般要到明天才恢复。\n\n"
+            "请把「DEM数据源 / 地形源」切换到【本地DEM (离线)】后再运行，\n"
+            "并把本地 DEM 图层加载进 QGIS 工程。"
+            + (("\n\n服务端原文：%s" % reason) if reason else "")
+        )
+
+
+def _daily_limit_reason(response):
+    """判断 429 是不是「每日配额用尽」。
+
+    Open-Meteo 免费版按 IP 限流，配额耗尽时返回：
+        {"error":true,"reason":"Daily API request limit exceeded. Please try again tomorrow."}
+    这种情况按天恢复，任何重试都是白等，必须立刻放弃。
+    返回 reason 字符串；不是日配额问题时返回 None。
+    """
+    if response is None or getattr(response, "status_code", None) != 429:
+        return None
+    try:
+        body = response.json() or {}
+    except Exception:  # nosec
+        return None
+    reason = str(body.get("reason", "") or "")
+    low = reason.lower()
+    if "daily" in low and ("limit" in low or "exceeded" in low):
+        return reason
+    if "try again tomorrow" in low:
+        return reason
+    return None
+
 import math
 import threading
 import queue
@@ -397,12 +437,13 @@ class TerrainSampler:
             
         if elevations is None:
             raise Exception(
-                "Failed to retrieve elevation data from Open-Meteo service.\n\n"
-                "This could be due to:\n"
-                "• No internet connection\n"
-                "• Open-Meteo service temporarily unavailable\n"
-                "• Too many points requested\n\n"
-                "Please check your connection or try again later."
+                "无法从 Open-Meteo 取得高程数据。\n\n"
+                "可能原因：\n"
+                "• 没有联网 / 网络不通\n"
+                "• Open-Meteo 服务暂时不可用或仍在限流\n"
+                "• 请求的采样点太多\n\n"
+                "建议把「DEM数据源 / 地形源」切到【本地DEM (离线)】，"
+                "本地方式稳定且秒级出图。"
             )
         
         # Build result
@@ -492,16 +533,21 @@ class TerrainSampler:
                 
                 if response.status_code != 200:
                     print(f"❌ HTTP error: {response.status_code}")
-                    
-                    # Exponential backoff
+
                     if response.status_code == 429:  # Rate limited
-                        wait_time = 5 * (attempt + 1)
+                        reason = _daily_limit_reason(response)
+                        if reason:
+                            # 日配额已耗尽 → 立即放弃。
+                            # 原来这里会 5s/10s/15s 退避重试三次，白等 30 秒还是拿不到数据，
+                            # 界面表现为「卡死」。配额是按天恢复的，重试没有任何意义。
+                            print(f"❌ Open-Meteo 今日配额已用尽：{reason}")
+                            raise QuotaExceededError(reason)
+                        wait_time = 3 * (attempt + 1)   # 只是临时突发限流，短等即可
                         print(f"⏳ Rate limited. Waiting {wait_time}s...")
                     else:
                         wait_time = 2 ** attempt
                         print(f"⏳ Retrying in {wait_time}s...")
-                    
-                    import time
+
                     time.sleep(wait_time)
                     continue
                 
@@ -578,9 +624,13 @@ class TerrainSampler:
                     
                     if response.status_code != 200:
                         print(f"❌ Chunk {chunk_num} HTTP error: {response.status_code}")
-                        
+
                         if response.status_code == 429:  # Rate limited
-                            wait_time = 5 * (attempt + 1)
+                            reason = _daily_limit_reason(response)
+                            if reason:
+                                print(f"❌ Open-Meteo 今日配额已用尽：{reason}")
+                                raise QuotaExceededError(reason)
+                            wait_time = 3 * (attempt + 1)
                             print(f"⏳ Rate limited. Waiting {wait_time}s...")
                             time.sleep(wait_time)
                             continue

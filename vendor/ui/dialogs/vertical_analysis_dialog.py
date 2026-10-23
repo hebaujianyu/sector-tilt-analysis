@@ -73,6 +73,62 @@ from ..widgets.sector_map_widget import SectorMapWidget
 from ...utils.kmz_exporter import KMZExporter
 from .defaults import RFDefaults  # Sesuaikan path
 
+_PIN_ON_STYLE = (
+    "QPushButton{font-size:13px; padding:0px; border:1px solid #c9a227;"
+    "border-radius:3px; background:#fff8dc; color:#b8860b;}"
+    "QPushButton:hover{background:#ffeeba;}"
+)
+_PIN_OFF_STYLE = (
+    "QPushButton{font-size:13px; padding:0px; border:1px solid #bfbfbf;"
+    "border-radius:3px; background:#f5f5f5; color:#8a8a8a;}"
+    "QPushButton:hover{background:#e6e6e6; color:#333;}"
+)
+
+
+def _push_info(title, msg):
+    """往 QGIS 消息栏推一条提示；无 GUI / 无 iface 环境静默跳过。"""
+    try:
+        if iface is not None and iface.messageBar() is not None:
+            iface.messageBar().pushMessage(title, msg, level=Qgis.Info, duration=3)
+    except Exception:  # nosec
+        pass
+
+
+def _get_store():
+    """拿到 settings_store 模块（同时兼容相对导入与绝对导入两种加载方式）。"""
+    try:
+        from .... import settings_store as mod
+        return mod
+    except Exception:  # nosec
+        pass
+    try:
+        import sector_tiltm_auto.settings_store as mod  # noqa
+        return mod
+    except Exception:  # nosec
+        return None
+
+
+def _make_default_pin(parent, tip):
+    """造一个 25×25 的『设为默认』星标按钮。
+
+    没存过默认时是灰色空心星，存过之后点亮成金色实心星。
+    """
+    btn = QPushButton("★", parent)
+    btn.setFixedSize(25, 25)
+    btn.setCursor(Qt.PointingHandCursor)
+    btn.setToolTip(tip)
+    btn.setStyleSheet(_PIN_OFF_STYLE)
+    return btn
+
+
+def _flash_pin(btn, text=None):
+    """把星标点亮 1.2 秒，给出『已记住』的视觉反馈。"""
+    btn.setStyleSheet(_PIN_ON_STYLE)
+    if text:
+        btn.setText(text)
+    QTimer.singleShot(1200, lambda: None)
+
+
 class DualHandleSlider(QWidget):
     """
     Custom widget with two handles for min-max range selection
@@ -1710,9 +1766,22 @@ class VerticalAnalysisDialog(QDialog):
         self.dem_source_combo.setToolTip(
             "选择高程数据源:\n"
             "• 本地DEM: 使用工程中已加载的DEM图层(离线,快速)\n"
-            "• Open-Meteo: 从在线API获取全球高程数据(需联网)"
+            "• Open-Meteo: 从在线API获取全球高程数据(需联网)\n\n"
+            "点右侧 ★ 可把当前选择存为默认，之后每次打开自动生效。"
         )
-        dem_container_layout.addWidget(self.dem_source_combo)
+        dem_row = QHBoxLayout()
+        dem_row.setContentsMargins(0, 0, 0, 0)
+        dem_row.setSpacing(3)
+        dem_row.addWidget(self.dem_source_combo)
+        self.pin_dem_btn = _make_default_pin(
+            self,
+            "设为默认：把当前【高程数据源】记住\n"
+            "下次打开工具箱自动选中它，不用再手动切换。",
+        )
+        dem_row.addWidget(self.pin_dem_btn)
+        dem_row.addStretch()
+        self.pin_dem_btn.clicked.connect(self._on_pin_dem_source)
+        dem_container_layout.addLayout(dem_row)
 
         # Status indicator untuk koneksi online
         self.online_status_label = QLabel("🌐 在线: 就绪")
@@ -1737,9 +1806,18 @@ class VerticalAnalysisDialog(QDialog):
         self.basemap_combo.setToolTip(
             "从QGIS工程选择底图图层\n"
             "• 仅显示栅格图层\n"
-            "• 选择'无'使用默认OSM"
+            "• 选择'无'使用默认OSM\n\n"
+            "点右侧 ★ 可把当前选择存为默认，之后每次打开自动生效。"
         )
         basemap_container_layout.addWidget(self.basemap_combo)
+
+        self.pin_basemap_btn = _make_default_pin(
+            self,
+            "设为默认：把当前【底图图层】记住\n"
+            "下次打开工具箱自动选中它，不用再手动切换。",
+        )
+        basemap_container_layout.addWidget(self.pin_basemap_btn)
+        self.pin_basemap_btn.clicked.connect(self._on_pin_basemap)
 
         # Tombol Refresh Basemap dengan icon SVG
         self.refresh_basemap_btn = QPushButton()
@@ -2489,8 +2567,69 @@ class VerticalAnalysisDialog(QDialog):
         
         # Refresh basemap list setelah dialog siap
         QTimer.singleShot(500, self._refresh_basemap_list)
-    
-    
+
+        # =====================================================
+        # 恢复用户已保存的「默认」选择（DEM 数据源 / 底图）
+        # =====================================================
+        self._restore_defaults()
+
+    # ---------------------------------------------------------------
+    # 默认项持久化
+    # ---------------------------------------------------------------
+    def _restore_defaults(self):
+        """把上次通过 ★ 保存的默认选择应用回来。"""
+        mod = _get_store()
+        if mod is None:
+            return
+
+        idx = mod.get_dem_source(None)
+        if idx in (0, 1):
+            self.dem_source_combo.blockSignals(True)
+            self.dem_source_combo.setCurrentIndex(idx)
+            self.dem_source_combo.blockSignals(False)
+            _flash_pin(self.pin_dem_btn)
+            if hasattr(self, "online_status_label"):
+                self.online_status_label.setVisible(idx == 1)
+
+        name = mod.get_basemap(None)
+        if name:
+            self._pending_default_basemap = name
+            # 底图列表要等 QTimer(500ms) 刷新完才有内容，故延迟再套用
+            QTimer.singleShot(600, self._apply_default_basemap)
+
+    def _apply_default_basemap(self):
+        name = getattr(self, "_pending_default_basemap", None)
+        if not name:
+            return
+        i = self.basemap_combo.findText(name)
+        if i >= 0:
+            self.basemap_combo.blockSignals(True)
+            self.basemap_combo.setCurrentIndex(i)
+            self.basemap_combo.blockSignals(False)
+            _flash_pin(self.pin_basemap_btn)
+            self._pending_default_basemap = None
+
+    def _on_pin_dem_source(self):
+        mod = _get_store()
+        if mod is None:
+            return
+        idx = self.dem_source_combo.currentIndex()
+        mod.set_dem_source(idx)
+        self.pin_dem_btn.setStyleSheet(_PIN_ON_STYLE)
+        if hasattr(self, "online_status_label"):
+            self.online_status_label.setVisible(idx == 1)
+        _push_info("扇区Tilt分析",
+                   "已把【%s】设为默认高程数据源" % self.dem_source_combo.currentText())
+
+    def _on_pin_basemap(self):
+        mod = _get_store()
+        if mod is None:
+            return
+        name = self.basemap_combo.currentText()
+        mod.set_basemap(name)
+        self.pin_basemap_btn.setStyleSheet(_PIN_ON_STYLE)
+        _push_info("扇区Tilt分析", "已把【%s】设为默认底图" % name)
+
     def set_cell_info(self, cell_id, extra="", cell_name=None):
         """
         在窗口标题栏显示当前小区号 + 小区名称（用于区分「选择问题」还是「筛选/绘制问题」）。
@@ -4266,7 +4405,6 @@ class VerticalAnalysisDialog(QDialog):
                     metadata_rows = [
                         ["Export Time", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
                         ["Plugin Version", "扇区Tilt分析 0.2.0"],
-                        ["引擎来源", "派生自 TiltMaster (GPLv3)"],
                         ["", ""],
                         ["", ""],
                         ["SITE PARAMETERS", ""],
