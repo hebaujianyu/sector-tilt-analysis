@@ -758,12 +758,18 @@ class RingProfileDialog(QDialog):
         sg = res["site_ground"]
         h = self.height_sb.value()
 
-        # ---- 地形（Tab1 同款：赭黄实填充 + 红棕脊线；填到 Y 轴下限 0 基线）----
-        pw.plot(dists, elevs, pen=pg.mkPen("#A0522D", width=2),
-                fillLevel=y0,
-                fillBrush=pg.mkBrush(205, 133, 63, 170))
+        # ---- Tab1 同款：地形滑动平均平滑（window=3，纯 Python）----
+        def _smooth(vals, win=3):
+            n = len(vals)
+            if n <= win:
+                return list(vals)
+            half = win // 2
+            return [sum(vals[max(0, i - half):min(n, i + half + 1)])
+                    / (min(n, i + half + 1) - max(0, i - half))
+                    for i in range(n)]
+        sm = _smooth(elevs)
 
-        # ---- 主波束（绿实线）+ 上/下波束（蓝/红虚线，总下倾±垂直波束宽度/2）----
+        # ---- 波束几何（总下倾 ± 垂直波束宽度/2，Tab1 同款三线）----
         tilt = res.get("tilt",
                        self.mech_sb.value() + self.elec_sb.value())
         vbw = getattr(self, "_last_vbw", self.vbw_sb.value())
@@ -771,50 +777,104 @@ class RingProfileDialog(QDialog):
         ang_l = max(min(tilt + vbw / 2.0, 89.5), -89.5)
         upper = [sg + h - d * math.tan(math.radians(ang_u)) for d in dists]
         lower = [sg + h - d * math.tan(math.radians(ang_l)) for d in dists]
-        pw.plot(dists, beam, pen=pg.mkPen((0, 160, 0), width=2))
-        pw.plot(dists, upper,
-                pen=pg.mkPen("#185FA5", width=1.5, style=Qt.DashLine))
-        pw.plot(dists, lower,
-                pen=pg.mkPen("#A32D2D", width=1.5, style=Qt.DashLine))
+        main = (beam if beam and len(beam) == len(dists) else
+                [sg + h - d * math.tan(math.radians(tilt)) for d in dists])
 
-        # ---- 塔桅（Tab1 同款铁塔造型：两条收边线 + 三道横撑 + 塔顶黑点）----
+        def _clip(line):
+            """波束线止于首次触地（线性插值截断），返回 [(d, h, i), ...]。"""
+            pts = []
+            for i, (d, lv) in enumerate(zip(dists, line)):
+                if d <= 1:
+                    pts.append((d, lv, i))
+                    continue
+                if sm[i] >= lv:
+                    if pts:
+                        pd, pl, pi = pts[-1]
+                        gp = pl - sm[pi]
+                        gi = sm[i] - lv
+                        f = gp / (gp + gi) if (gp + gi) > 0 else 0.0
+                        pts.append((pd + f * (d - pd),
+                                    pl + f * (lv - pl), i))
+                    break
+                pts.append((d, lv, i))
+            return pts
+
+        # ---- 青色波束覆盖区（Tab1 同款 tosca，透明度 60；超界由 Y 锁裁掉）----
+        bf = pg.FillBetweenItem(pg.PlotDataItem(dists, upper),
+                                pg.PlotDataItem(dists, lower),
+                                brush=pg.mkBrush(6, 250, 250, 60))
+        bf.setZValue(-10)
+        pw.addItem(bf)
+
+        # ---- 地形（Tab1 同款：不透明赭黄填充 + 棕色脊线；填到 Y 锁下限）----
+        pw.plot(dists, sm, pen=pg.mkPen("brown", width=2),
+                fillLevel=y0,
+                fillBrush=pg.mkBrush(203, 145, 57, 255))
+
+        # ---- 分色地形脊线（Tab1 同款：净空>10m 绿 / 0~10m 橙 / <0 红）----
+        mc = _clip(main)
+        cls_colors = ((0, 180, 0), (255, 180, 0), (200, 0, 0))
+        runs, cur_cls, cur_pts, prev_pt = [], None, [], None
+        for d, lv, i in mc:
+            terr = sm[i]
+            cl = lv - terr
+            c = 0 if cl > 10 else (1 if cl > 0 else 2)
+            if c != cur_cls:
+                if cur_pts:
+                    runs.append((cur_cls, cur_pts))
+                cur_cls = c
+                cur_pts = [prev_pt] if prev_pt is not None else []
+            cur_pts.append((d, terr))
+            prev_pt = (d, terr)
+        if cur_pts:
+            runs.append((cur_cls, cur_pts))
+        for c, pts in runs:
+            if len(pts) >= 2:
+                pw.plot([p[0] for p in pts], [p[1] for p in pts],
+                        pen=pg.mkPen(cls_colors[c], width=3))
+
+        # ---- 三条波束线：止于各自首次触地点（Tab1 同款颜色与线宽）----
+        uc = _clip(upper)
+        lc = _clip(lower)
+        pw.plot([p[0] for p in uc], [p[1] for p in uc],
+                pen=pg.mkPen("blue", width=2, style=Qt.DashLine))
+        pw.plot([p[0] for p in lc], [p[1] for p in lc],
+                pen=pg.mkPen("red", width=2, style=Qt.DashLine))
+        pw.plot([p[0] for p in mc], [p[1] for p in mc],
+                pen=pg.mkPen((0, 160, 0), width=3))
+
+        # ---- 塔桅（Tab1 同款：收边塔身 + 横撑 + 天线杆 + 红色天线头）----
         base_half = max(user_max * 0.012, 5.0)
         for sgn in (-1, 1):
             pw.plot([sgn * base_half, 0], [sg, sg + h],
-                    pen=pg.mkPen("k", width=1))
+                    pen=pg.mkPen((60, 60, 60), width=1.2))
         for frac in (0.25, 0.55, 0.85):
             y = sg + h * frac
             xw = base_half * (1.0 - frac)
-            pw.plot([-xw, xw], [y, y], pen=pg.mkPen("k", width=1))
+            pw.plot([-xw, xw], [y, y], pen=pg.mkPen((60, 60, 60), width=1))
+        mast_h = (y1 - y0) * 0.035
+        pw.plot([0, 0], [sg + h, sg + h + mast_h],
+                pen=pg.mkPen((50, 50, 50), width=2))
         pw.addItem(pg.ScatterPlotItem(
-            x=[0], y=[sg + h], size=8,
-            pen=None, brush=pg.mkBrush("k")))
+            x=[0], y=[sg + h + mast_h], size=6,
+            pen=pg.mkPen((120, 40, 40), width=0.8),
+            brush=pg.mkBrush(200, 60, 60)))
 
-        # ---- 波束-地形交点（上=蓝点 / 下=红点，对应 Tab1 覆盖图 RF Legend）----
-        def _first_cross(line):
-            for d, e, lv in zip(dists, elevs, line):
-                if d > 1 and e > lv:
-                    return d, e
-            return None, None
-
-        for line, color in ((upper, "#185FA5"), (lower, "#A32D2D")):
-            cd, ce = _first_cross(line)
-            if cd is not None:
+        # ---- 交点标记（Tab1 同款：上蓝/下红白描边、主波束落地点绿点黑描边）----
+        for cl_line, col in ((uc, (42, 125, 225)), (lc, (255, 0, 0))):
+            if cl_line and cl_line[-1][0] < dists[-1] - 1e-6:
+                cd, _ch, ci = cl_line[-1]
                 pw.addItem(pg.ScatterPlotItem(
-                    x=[cd], y=[ce], size=8,
-                    pen=pg.mkPen(color, width=1.5),
-                    brush=pg.mkBrush(color)))
-
-        # ---- 首次遮挡点（红点 + 距离标注，对应 Tab1 的 "246 m" 标签）----
-        if not clear:
-            idx = min(range(len(dists)), key=lambda k: abs(dists[k] - fo))
+                    x=[cd], y=[sm[ci]], size=10,
+                    pen=pg.mkPen("w", width=1.5), brush=pg.mkBrush(*col)))
+        if not clear and mc and mc[-1][0] < dists[-1] - 1e-6:
+            cd, _ch, ci = mc[-1]
             pw.addItem(pg.ScatterPlotItem(
-                x=[dists[idx]], y=[elevs[idx]], size=12,
-                pen=pg.mkPen("#A32D2D", width=2),
-                brush=pg.mkBrush("#A32D2D")))
-            ti = pg.TextItem(f"{fo:.0f} m", color="#A32D2D",
+                x=[cd], y=[sm[ci]], size=12,
+                pen=pg.mkPen("k", width=1.5), brush=pg.mkBrush(0, 160, 0)))
+            ti = pg.TextItem(f"{fo:.0f} m", color="#333333",
                              anchor=(0.5, 1.15))
-            ti.setPos(dists[idx], elevs[idx])
+            ti.setPos(cd, sm[ci])
             pw.addItem(ti)
 
         title = (f"{label} · 畅通" if clear
