@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QHeaderView,
     QWidget, QScrollArea, QApplication, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QEvent
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 
 try:
@@ -214,17 +214,17 @@ class RingProfileDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("环向剖面分析 (45° × 8 方向)")
-        # 窗口自适应屏幕：不超过可用区域的 95%×90%，渲染时不被内容撑大（防跳变）
+        # 初始尺寸参考屏幕；不设 setMaximumSize——嵌入 Tab 页时它会卡死页面
+        # 尺寸（离屏复现实锤），父窗口/布局天然约束足够
         screen = QApplication.desktop().availableGeometry()
         self.resize(min(1150, int(screen.width() * 0.95)),
                     min(820, int(screen.height() * 0.90)))
-        self.setMaximumSize(screen.width(), screen.height() - 30)
         self._results = []
         self._failures = []
         self._worker = None
         self._mini = []          # 8 个分方向小剖面 PlotWidget
         self._prog_done = 0
-        self._cell_size = None   # 九宫格当前正方形边长（防重复 setFixedSize）
+        self._grid_side = None   # 右侧正方形容器当前边长（防重复 setFixedSize）
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -322,6 +322,7 @@ class RingProfileDialog(QDialog):
         form.addRow(self.status_lbl)
 
         params_gb.setMinimumWidth(350)
+        params_gb.setMaximumWidth(430)  # 余宽让给汇总表和九宫格，参数区不无限拉宽
         left_col.addWidget(params_gb)
 
         # ---- 左列下方：8 方向汇总表（方案C：挪到参数下侧）----
@@ -332,17 +333,26 @@ class RingProfileDialog(QDialog):
         hdr = self.table.horizontalHeader()
         if hdr is not None:
             hdr.setSectionResizeMode(QHeaderView.Stretch)
+        # 水平 Ignored：表格 sizeHint 不再抬高左列最小宽度（曾把九宫格挤到溢出）
+        self.table.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         left_col.addWidget(self.table, 1)
 
         # ---- 右侧：3×3 九宫格（8 方向剖面按罗盘方位 + 中心玫瑰图）----
+        # 正方形由「容器整体固定为正方形」保证（resizeEvent 里算边长），
+        # 格子内部等分行列拉伸——容器边长 = 3×格边长 + 2×间距，格子必然正方形；
+        # 容器自身最小尺寸恒为 0，与左列之间不存在尺寸反馈，任何窗口尺寸都不会溢出。
         if pg is not None:
             self._grid_holder = QWidget()
             outer = QVBoxLayout(self._grid_holder)
             outer.setContentsMargins(0, 0, 0, 0)
             mid = QHBoxLayout()
-            mid.addStretch(1)   # 水平居中：格子固定正方形后余宽留白
+            mid.setContentsMargins(0, 0, 0, 0)
             grid = QGridLayout()
             grid.setSpacing(4)
+            for c in range(3):
+                grid.setColumnStretch(c, 1)
+            for r in range(3):
+                grid.setRowStretch(r, 1)
             # 罗盘方位排布：索引 = azimuth // 45
             #   (0,0)NW (0,1)N (0,2)NE
             #   (1,0)W  (1,1)玫瑰 (1,2)E
@@ -352,10 +362,9 @@ class RingProfileDialog(QDialog):
             self._mini = []
             for i in range(8):
                 pw = pg.PlotWidget(background="w")
-                # Ignored：无视控件 sizeHint，完全跟随固定正方形尺寸
+                # Ignored：完全跟随网格等分空间（正方形容器的 1/3 减间距）
                 pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-                pw.setMinimumHeight(80)
-                pw.setMinimumWidth(80)
+                pw.setMinimumSize(60, 60)
                 pw.showGrid(x=True, y=True, alpha=0.25)
                 # 性能优化（与 vendor TerrainProfileWidget 一致）
                 pw.setClipToView(True)
@@ -373,22 +382,16 @@ class RingProfileDialog(QDialog):
                 grid.addWidget(pw, r, c)
                 self._mini.append(pw)
 
-            # 中心：阻挡玫瑰图（同样固定正方形，保证九宫格等大）
+            # 中心：阻挡玫瑰图
             self.rose_pw = pg.PlotWidget(background="w")
             self.rose_pw.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-            self.rose_pw.setMinimumHeight(80)
-            self.rose_pw.setMinimumWidth(80)
+            self.rose_pw.setMinimumSize(60, 60)
             self.rose_pw.setAspectLocked(True)
             self.rose_pw.hideAxis("left")
             self.rose_pw.hideAxis("bottom")
             grid.addWidget(self.rose_pw, 1, 1)
-            mid.addLayout(grid)
-            mid.addStretch(1)
-            outer.addStretch(1)  # 垂直居中
-            outer.addLayout(mid)
-            outer.addStretch(1)
-            # 窗口/容器尺寸变化 → 重算正方形边长（s = min(宽,高)/3）
-            self._grid_holder.installEventFilter(self)
+            mid.addLayout(grid, 1)
+            outer.addLayout(mid, 1)
             top.addLayout(left_col)
             top.addWidget(self._grid_holder, 1)
         else:
@@ -407,32 +410,31 @@ class RingProfileDialog(QDialog):
         self.btn_close.clicked.connect(self.close)
 
     # ------------------------------------------------------------------
-    # 九宫格正方形格子：容器尺寸变化时重算边长 s = min(宽,高) / 3
+    # 九宫格正方形容器：页尺寸变化时把右侧容器固定为正方形
+    # side = min(页宽-左列最小宽, 页高) → 3×格边长 = side - 2×间距，格子必然正方形。
+    # 左列最小宽从布局对象解析式取得（不用陈旧的 geometry），无尺寸反馈、无滞后。
     # ------------------------------------------------------------------
-    def eventFilter(self, obj, event):
-        if (obj is getattr(self, "_grid_holder", None)
-                and event.type() == QEvent.Resize):
-            self._fit_grid_cells()
-        return super().eventFilter(obj, event)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_grid()
 
-    def _fit_grid_cells(self):
+    def _fit_grid(self):
         holder = getattr(self, "_grid_holder", None)
-        widgets = list(self._mini)
-        if self.rose_pw is not None:
-            widgets.append(self.rose_pw)
-        if holder is None or not widgets:
+        if holder is None:
             return
-        w, h = holder.width(), holder.height()
-        if w <= 0 or h <= 0:
+        main_lay = self.layout()
+        if main_lay is None or main_lay.count() < 1:
             return
-        spacing = 4  # 与 grid.setSpacing 一致
-        s = (min(w, h) - 2 * spacing) // 3
-        s = max(80, int(s))
-        if s == self._cell_size:
+        top = main_lay.itemAt(0).layout()
+        if top is None or top.count() < 2:
             return
-        self._cell_size = s
-        for pw in widgets:
-            pw.setFixedSize(s, s)
+        left_min = top.itemAt(0).minimumSize().width()   # 左列最小宽（稳定值）
+        avail_w = self.width() - left_min - 24           # 9×2 页边距 + 6 项间距
+        avail_h = self.height() - 18                     # 9×2 页边距
+        side = max(240, int(min(avail_w, avail_h)))
+        if side != self._grid_side:
+            self._grid_side = side
+            holder.setFixedSize(side, side)
 
     # ------------------------------------------------------------------
     # 经纬度预填
