@@ -130,11 +130,14 @@ def _detect_unique_id(feature, layer):
         g = _val(gnb_field)
         c = _val(cell_field)
         if g is not None and c is not None:
+            # 注意：必须用 '-' 作分隔符拼成 gNB-Cell。曾误写成
+            # f"{g}_".rstrip("_") + f"{c}" —— 分隔符被 rstrip 吃掉，
+            # 得到 '3286202202' 这类无分隔串，parse_cell_id 判定格式非法，
+            # 所有分字段工参层都会静默回退「要素直取」。
             try:
-                return (f"{int(float(str(g)))}_".rstrip("_")
-                        + f"{int(float(str(c)))}"), True
+                return f"{int(float(str(g)))}-{int(float(str(c)))}", True
             except (ValueError, TypeError):
-                return f"{str(g).strip()}_{str(c).strip()}", True
+                return f"{str(g).strip()}-{str(c).strip()}", True
 
     # 3) 单个 CellID 本地值（最坏情况仍返回，由调用方回退）
     for cand in ["CellID", "CELLID", "cellid", "cell_id", "CELL_ID", "CI",
@@ -844,7 +847,9 @@ def run_from_feature(feature, layer, auto_run=True):
     values = extract_site_values(site_dict, field_map)
 
     # 5.6~5.9 启动对话框 → 填充 → 自动运行
-    _apply_and_run(values, values.get("cell_name"), parsed["cell_uid"])
+    # 标题用「原始小区号」（如 3286202-202）而不是内部归一化的 cell_uid
+    # （3286202_202），与工参表里看到的写法一致，便于人工核对。
+    _apply_and_run(values, values.get("cell_name"), unique_id)
 
 
 # ============================================================================
