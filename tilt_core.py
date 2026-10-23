@@ -585,11 +585,16 @@ def _create_dem_anchor():
         ds = drv.Create(path, 1, 1, 1, gdal.GDT_Float32)
         if ds is None:
             return None
-        ds.SetGeoTransform([116.0, 0.01, 0.0, 40.0, 0.0, -0.01])
+        ds.SetGeoTransform([116.4074, 0.01, 0.0, 39.9042, 0.0, -0.01])
         srs = osr.SpatialReference()
         srs.ImportFromEPSG(4326)
         ds.SetProjection(srs.ExportToWkt())
-        ds.GetRasterBand(1).WriteArray([[0.0]])
+        # GDAL 3 的 WriteArray 要求 numpy 数组，传 python list 会抛
+        # AttributeError: 'list' object has no attribute 'shape' —— 曾导致
+        # 锚点永远建不出来、无 DEM 项目下 controller 绑不上。1×1 常量栅格
+        # 直接用 Fill 写 0，彻底免掉 numpy 依赖。
+        band = ds.GetRasterBand(1)
+        band.Fill(0.0)
         ds.FlushCache()
         ds = None
 

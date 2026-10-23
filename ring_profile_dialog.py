@@ -307,12 +307,10 @@ class RingProfileDialog(QDialog):
             "· 点位是空地/无要素 → 只取该点经纬度，RF 参数请手动填\n"
             "点完自动恢复原来的地图工具。"
         )
-        self.btn_sel = QPushButton("从选中要素获取")
         self.btn_generate = QPushButton("生成环向剖面")
         self.btn_generate.setStyleSheet("font-weight:bold;")
         self.btn_close = QPushButton("关闭")
         btn_row.addWidget(self.btn_pick)
-        btn_row.addWidget(self.btn_sel)
         btn_row.addWidget(self.btn_generate)
         btn_row.addWidget(self.btn_close)
         form.addRow(btn_row)
@@ -406,7 +404,6 @@ class RingProfileDialog(QDialog):
         # ---- 信号 ----
         self.btn_generate.clicked.connect(self._on_generate)
         self.btn_pick.clicked.connect(self._on_pick)
-        self.btn_sel.clicked.connect(self._from_selection)
         self.btn_close.clicked.connect(self.close)
 
     # ------------------------------------------------------------------
@@ -531,60 +528,6 @@ class RingProfileDialog(QDialog):
         else:
             miss.append("波束宽度")
         return got, miss
-
-    def _from_selection(self):
-        try:
-            layer = iface.activeLayer()
-            if not isinstance(layer, QgsVectorLayer):
-                self.status_lbl.setText("请在图层树中选中一个矢量图层。")
-                return
-            sel = layer.selectedFeatures()
-            if len(sel) != 1:
-                self.status_lbl.setText("请选中恰好 1 个要素。")
-                return
-            feat = sel[0]
-            fields = list(layer.fields())
-            lon = lat = None
-            lon_f = _match_field(fields, FIELD_CANDIDATES["longitude"])
-            lat_f = _match_field(fields, FIELD_CANDIDATES["latitude"])
-            if lon_f and lat_f:
-                try:
-                    lon = float(feat[lon_f])
-                    lat = float(feat[lat_f])
-                except (ValueError, TypeError, KeyError):  # nosec
-                    lon = lat = None
-            if lat is None or lon is None:
-                geom = feat.geometry()
-                if geom is not None and not geom.isEmpty():
-                    centroid = geom.centroid().asPoint()
-                    src_crs = layer.crs()
-                    if src_crs is not None and src_crs.authid() != "EPSG:4326":
-                        xform = QgsCoordinateTransform(
-                            src_crs, QgsProject.instance().crsFromAuthId("EPSG:4326"),
-                            QgsProject.instance()
-                        )
-                        pt = xform.transform(centroid)
-                    else:
-                        pt = centroid
-                    lon, lat = pt.x(), pt.y()
-            if lat is None or lon is None:
-                self.status_lbl.setText("选中要素无法获取经纬度。")
-                return
-            self.lon_le.setText(f"{lon:.6f}")
-            self.lat_le.setText(f"{lat:.6f}")
-            # 顺便带入挂高/下倾/波束宽度（有对应字段才带入，并明确回报）
-            vals = extract_site_values(
-                {f.name(): feat[f.name()] for f in fields}, {}
-            )
-            got, miss = self._apply_rf_vals(vals)
-            coord_src = "经纬度字段" if (lon_f and lat_f) else "几何质心（图层无经纬度字段，位置可能偏）"
-            msg = (f"已取 [{layer.name()}] 选中要素 — {coord_src}；"
-                   f"已带入：" + ("、".join(got) if got else "无"))
-            if miss:
-                msg += f"｜未识别({'/'.join(miss)})，请手动填写"
-            self.status_lbl.setText(msg)
-        except Exception as e:  # nosec
-            self.status_lbl.setText(f"从选中要素获取失败: {e}")
 
     # ------------------------------------------------------------------
     # 生成

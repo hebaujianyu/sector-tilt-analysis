@@ -1549,15 +1549,15 @@ class VerticalAnalysisDialog(QDialog):
         
         # Latitude
         self.latitude_input = QLineEdit()
-        self.latitude_input.setText("-6.88908")
-        self.latitude_input.setPlaceholderText("-6.88908")
+        self.latitude_input.setText("39.904200")
+        self.latitude_input.setPlaceholderText("39.904200")
         self.latitude_input.setFixedWidth(spinbox_width)
         site_layout.addRow("纬度:", self.latitude_input)
 
         # Longitude
         self.longitude_input = QLineEdit()
-        self.longitude_input.setText("107.61848")
-        self.longitude_input.setPlaceholderText("107.61848")
+        self.longitude_input.setText("116.407400")
+        self.longitude_input.setPlaceholderText("116.407400")
         self.longitude_input.setFixedWidth(spinbox_width)
         site_layout.addRow("经度:", self.longitude_input)
 
